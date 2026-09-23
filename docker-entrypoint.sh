@@ -1,6 +1,12 @@
 #!/bin/sh
 set -e
 
+# If the first argument is not an option (does not start with -) and is not empty,
+# and it's not the default binary execution, execute the passed command directly
+if [ "$#" -gt 0 ] && [ "${1#-}" = "$1" ] && [ "$1" != "/app/blog" ]; then
+  exec "$@"
+fi
+
 mkdir -p /app/storage
 
 # Initialize database if not already present

@@ -22,7 +22,7 @@ echo "[CONTAINER] Step 1: Building container image ($IMAGE_NAME)..."
 docker build -t "$IMAGE_NAME" . 2>&1 | tee "$REPORT_DIR/docker-build.log"
 
 echo "[CONTAINER] Step 2: Verifying runtime container does not contain Ruby or Spinel..."
-docker run --rm "$IMAGE_NAME" /bin/sh -c '
+docker run --rm --entrypoint /bin/sh "$IMAGE_NAME" -c '
   if command -v ruby || command -v rails || command -v spinel || command -v spin; then
     echo "ERROR: Runtime container must not include Ruby, Rails, or Spinel!"
     exit 1
@@ -46,6 +46,7 @@ echo "[CONTAINER] Step 4: Creating article via HTTP in container..."
 # Use python helper or curl to post article
 python3 -c "
 import http.client, urllib.parse, html.parser
+from http.cookies import SimpleCookie
 
 class TokenParser(html.parser.HTMLParser):
     token = ''
@@ -54,20 +55,35 @@ class TokenParser(html.parser.HTMLParser):
         if tag == 'input' and attrs.get('name') == 'authenticity_token':
             self.token = attrs.get('value', '')
 
-conn = http.client.HTTPConnection('127.0.0.1', $CONTAINER_PORT)
+conn = http.client.HTTPConnection('127.0.0.1', $CONTAINER_PORT, timeout=10)
 conn.request('GET', '/articles/new')
 resp = conn.getresponse()
+cookies = {}
+for k, v in resp.getheaders():
+    if k.lower() == 'set-cookie':
+        jar = SimpleCookie(v)
+        cookies.update({name: item.value for name, item in jar.items()})
+
+html_data = resp.read().decode()
 parser = TokenParser()
-parser.feed(resp.read().decode())
+parser.feed(html_data)
+
+headers = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'Origin': 'http://127.0.0.1:$CONTAINER_PORT',
+    'Referer': 'http://127.0.0.1:$CONTAINER_PORT/articles/new'
+}
+if cookies:
+    headers['Cookie'] = '; '.join(f'{k}={v}' for k, v in cookies.items())
 
 body = urllib.parse.urlencode({
     'article[title]': 'Container Persistence Article',
     'article[body]': 'Verified across container recreation with volume mount.',
     'authenticity_token': parser.token
 })
-conn.request('POST', '/articles', body, {'Content-Type': 'application/x-www-form-urlencoded'})
+conn.request('POST', '/articles', body, headers)
 post_resp = conn.getresponse()
-assert post_resp.status in (302, 303), f'Expected redirect, got {post_resp.status}'
+assert post_resp.status in (302, 303), f'Expected redirect, got {post_resp.status} with body: {post_resp.read().decode()[:500]}'
 print('Created article in container successfully.')
 "
 
