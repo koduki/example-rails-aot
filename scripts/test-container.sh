@@ -115,7 +115,9 @@ test -s "$ROOT/artifacts/blog-container-image.tar.gz"
 echo "[CONTAINER] Image saved to artifacts/blog-container-image.tar.gz ($(du -h "$ROOT/artifacts/blog-container-image.tar.gz" | cut -f1))"
 
 echo "[CONTAINER] Step 8: Testing docker load from saved archive..."
-docker rmi "$IMAGE_NAME"
+docker stop blog-test-2 2>/dev/null || true
+docker rm -f blog-test-2 2>/dev/null || true
+docker rmi -f "$IMAGE_NAME"
 docker load < "$ROOT/artifacts/blog-container-image.tar.gz"
 docker inspect "$IMAGE_NAME" > /dev/null
 echo "[CONTAINER] Docker load verification succeeded!"
