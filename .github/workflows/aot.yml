@@ -1,4 +1,4 @@
-name: Rails to Spinel foundation
+name: Rails to Spinel AOT Pipeline
 on:
   push:
   pull_request:
@@ -9,10 +9,10 @@ defaults:
   run:
     shell: bash
 concurrency:
-  group: foundation-${{ github.head_ref || github.ref_name }}
+  group: aot-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
-  build:
+  build-and-test:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
@@ -55,8 +55,10 @@ jobs:
         run: bash scripts/install-toolchain.sh 2>&1 | tee reports/toolchain.log
       - name: Strict transpile and native build
         run: bash scripts/build.sh
-      - name: HTTP and restart persistence
+      - name: HTTP and restart persistence smoke test
         run: bash scripts/smoke-native.sh
+      - name: Differential comparison (Rails vs Spinel AOT)
+        run: bash scripts/run-comparison.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -72,8 +74,27 @@ jobs:
         with:
           name: spinel-source-${{ github.sha }}
           path: artifacts/spinel-source.tar.gz
+
+  container-verification:
+    needs: build-and-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test Docker container build, persistence, and load
+        run: bash scripts/test-container.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: container-image-${{ github.sha }}
+          path: artifacts/blog-container-image.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: container-reports-${{ github.sha }}
+          path: reports/container/
+
   runtime-without-ruby:
-    needs: build
+    needs: build-and-test
     runs-on: ubuntu-24.04
     container: ubuntu:24.04
     timeout-minutes: 10
