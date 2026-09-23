@@ -28,6 +28,12 @@ if ! test -x "$PREFIX/bin/spin"; then
   make -C .cache/spinel install PREFIX="$PREFIX" CC="${CC:-clang}"
 fi
 export PATH="$PREFIX/bin:$PATH"
+uname -a
+ruby --version
+bundle --version
+node --version
+"${CC:-clang}" --version
+sqlite3 --version
 roundhouse --version
 spinel --version
 spin --version

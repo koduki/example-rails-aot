@@ -42,6 +42,9 @@ def article_row():
 
 status, _, text = request('GET', '/articles')
 assert status == 200 and 'Articles' in text, (status, text[:500])
+for asset in ('tailwind.css', 'turbo.min.js', 'stimulus.min.js', 'application.js'):
+    status, _, text = request('GET', '/assets/' + asset)
+    assert status == 200 and text.strip(), (asset, status)
 if phase == 'create':
     status, _, form = request('GET', '/articles/new')
     assert status == 200, status

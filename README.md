@@ -56,7 +56,7 @@ PORT=3000 SPINEL_WORKERS=2 ./blog
 
 [Actions](https://github.com/koduki/example-rails-aot/actions) は Rails テスト → ツール導入 → strict 変換 → AOT → HTTP/再起動確認を実行します。元ソース、変換ソース、実行パッケージ、診断を別の artifact に保存します。
 
-初回の source bootstrap は検証用です。Actions はソースを自動 commit しません。初期生成したソースをレビューしてコミットした後、この bootstrap ステップは削除します。
+Rails 8.1.3.1 から生成した `blog/` と lockfile をコミットしています。通常の Actions はこのソースを使い、ソースの自動生成・自動 commit は行いません。CSS と Hotwire の JavaScript は固定した Rails bundle から用意し、Roundhouse の `ROUNDHOUSE_ASSETS_DIR` で生成物に含めます。
 
 ## 検証の範囲
 
