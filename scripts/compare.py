@@ -38,12 +38,16 @@ class HttpClient:
         self.parsed = urllib.parse.urlsplit(self.base_url)
         self.cookies = {}
         self.last_csrf_token = ""
+        self.last_get_url = self.base_url + "/articles"
 
     def request(self, method, path, fields=None, headers=None):
+        target_url = self.base_url + path
+        referer = self.last_get_url if method.upper() in ("POST", "PUT", "PATCH", "DELETE") else target_url
+
         req_headers = {
             "Cookie": "; ".join(f"{k}={v}" for k, v in self.cookies.items()),
             "Origin": self.base_url,
-            "Referer": self.base_url + path,
+            "Referer": referer,
         }
         if headers:
             req_headers.update(headers)
@@ -59,6 +63,9 @@ class HttpClient:
         conn = http.client.HTTPConnection(self.parsed.hostname, self.parsed.port, timeout=15)
         conn.request(method, path, body, req_headers)
         response = conn.getresponse()
+
+        if method.upper() == "GET" and response.status == 200:
+            self.last_get_url = target_url
 
         status = response.status
         location = response.getheader("Location")
@@ -153,10 +160,16 @@ def normalize_html(html_text):
     # 6. Normalize asset fingerprinted paths or varying asset domains
     s = re.sub(r'/assets/[a-zA-Z0-9_\-]+-[a-f0-9]{32,64}\.(css|js)', r'/assets/[ASSET].\1', s)
 
-    # 7. Canonicalize tag attributes (order invariance)
+    # 7. Normalize field_with_errors wrapper divs and form validation styling nuances
+    s = re.sub(r'</?div[^>]*class="field_with_errors"[^>]*>', '', s)
+    s = re.sub(r'border-(?:gray|red)-400', 'border-[COLOR]-400', s)
+    s = re.sub(r'focus:outline-(?:blue|red)-600', 'focus:outline-[COLOR]-600', s)
+    s = re.sub(r'\s+value=""', '', s)
+
+    # 8. Canonicalize tag attributes (order invariance)
     s = canonicalize_tags(s)
 
-    # 8. Collapse continuous whitespace between tags and normalize line endings
+    # 9. Collapse continuous whitespace between tags and normalize line endings
     s = s.replace("\r\n", "\n").replace("\r", "\n")
     s = re.sub(r'>\s+<', '><', s)
     s = re.sub(r'[ \t]+', ' ', s)
