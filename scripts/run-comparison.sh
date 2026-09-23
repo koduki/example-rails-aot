@@ -50,7 +50,7 @@ fi
 # Run db:prepare to build complete schema, migrations table, and seed data
 (
   cd "$ROOT/blog"
-  bin/rails db:prepare
+  bundle exec rails db:prepare
 )
 
 # Populate isolated databases with the exact same initial state
@@ -69,7 +69,7 @@ echo "[DIFF] Starting Rails server on port $RAILS_PORT..."
   cd "$ROOT/blog"
   export PORT=$RAILS_PORT
   export RAILS_ENV=development
-  exec bin/rails server -p $RAILS_PORT -b 127.0.0.1
+  exec bundle exec rails server -p $RAILS_PORT -b 127.0.0.1
 ) > "$REPORT_DIR/rails-server.log" 2>&1 &
 RAILS_PID=$!
 

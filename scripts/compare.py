@@ -89,13 +89,38 @@ class HttpClient:
         }
 
 
+def canonicalize_tags(html_str):
+    """Sort attributes within HTML tags alphabetically so attribute ordering does not cause diffs."""
+    def sort_attrs(match):
+        tag_name = match.group(1)
+        attrs_str = match.group(2)
+        closing = match.group(3) or ""
+        if not attrs_str or not attrs_str.strip():
+            return f"<{tag_name}{closing}>"
+        # Match attribute="value" or attribute='value' or standalone attribute
+        attr_pairs = re.findall(r'([a-zA-Z0-9_\-]+)(?:=(["\'])(.*?)\2)?', attrs_str)
+        sorted_attrs = sorted(attr_pairs, key=lambda x: x[0])
+        formatted = []
+        for k, q, v in sorted_attrs:
+            if q:
+                formatted.append(f'{k}="{v}"')
+            else:
+                formatted.append(k)
+        return f"<{tag_name} {' '.join(formatted)}{closing}>"
+
+    return re.sub(r'<([a-zA-Z0-9\-]+)([^>]*?)(\s*/?)>', sort_attrs, html_str)
+
+
 def normalize_html(html_text):
     """Normalize dynamic and transient elements in HTML for structural comparison."""
-    # 1. Normalize CSRF tokens
+    # 1. Strip HTML comments (such as Rails development view template annotations)
+    s = re.sub(r'<!--.*?-->', '', html_text, flags=re.DOTALL)
+
+    # 2. Normalize CSRF tokens
     s = re.sub(
         r'(<input[^>]+name="authenticity_token"[^>]+value=")[^"]*(")',
         r'\1[CSRF_TOKEN]\2',
-        html_text,
+        s,
     )
     s = re.sub(
         r'(<meta[^>]+name="csrf-token"[^>]+content=")[^"]*(")',
@@ -103,7 +128,14 @@ def normalize_html(html_text):
         s,
     )
 
-    # 2. Extract <main> or <body> content if present to focus on semantic content
+    # 3. Normalize Turbo Cable stream signatures
+    s = re.sub(
+        r'(signed-stream-name=")[^"]*(")',
+        r'\1[STREAM_SIGNATURE]\2',
+        s,
+    )
+
+    # 4. Extract <main> or <body> content if present to focus on semantic content
     main_match = re.search(r'<main[^>]*>(.*?)</main>', s, re.DOTALL | re.IGNORECASE)
     if main_match:
         s = main_match.group(1)
@@ -112,17 +144,20 @@ def normalize_html(html_text):
         if body_match:
             s = body_match.group(1)
 
-    # 3. Normalize timestamps (ISO-8601 or common Rails datetime formats)
+    # 5. Normalize timestamps (ISO-8601 or common Rails datetime formats)
     s = re.sub(
         r'\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?',
         '[TIMESTAMP]',
         s,
     )
 
-    # 4. Normalize asset fingerprinted paths or varying asset domains
+    # 6. Normalize asset fingerprinted paths or varying asset domains
     s = re.sub(r'/assets/[a-zA-Z0-9_\-]+-[a-f0-9]{32,64}\.(css|js)', r'/assets/[ASSET].\1', s)
 
-    # 5. Collapse continuous whitespace between tags and normalize line endings
+    # 7. Canonicalize tag attributes (order invariance)
+    s = canonicalize_tags(s)
+
+    # 8. Collapse continuous whitespace between tags and normalize line endings
     s = s.replace("\r\n", "\n").replace("\r", "\n")
     s = re.sub(r'>\s+<', '><', s)
     s = re.sub(r'[ \t]+', ' ', s)
