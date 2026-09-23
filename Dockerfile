@@ -30,8 +30,9 @@ RUN apt-get update -qq && \
 WORKDIR /workspace
 COPY . /workspace
 
-# Install pinned Roundhouse and Spinel, then transpile and build native binary
+# Install pinned Roundhouse and Spinel, install bundle dependencies, then transpile and build native binary
 RUN bash scripts/install-toolchain.sh && \
+    (cd blog && bundle install) && \
     bash scripts/build.sh
 
 # Stage 2: Minimal runtime image without Ruby, Rails, or Spinel
