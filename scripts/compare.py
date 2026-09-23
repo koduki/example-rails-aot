@@ -90,13 +90,12 @@ class HttpClient:
 
 
 def canonicalize_tags(html_str):
-    """Sort attributes within HTML tags alphabetically so attribute ordering does not cause diffs."""
+    """Sort attributes within HTML tags alphabetically and normalize self-closing slashes."""
     def sort_attrs(match):
         tag_name = match.group(1)
         attrs_str = match.group(2)
-        closing = match.group(3) or ""
         if not attrs_str or not attrs_str.strip():
-            return f"<{tag_name}{closing}>"
+            return f"<{tag_name}>"
         # Match attribute="value" or attribute='value' or standalone attribute
         attr_pairs = re.findall(r'([a-zA-Z0-9_\-]+)(?:=(["\'])(.*?)\2)?', attrs_str)
         sorted_attrs = sorted(attr_pairs, key=lambda x: x[0])
@@ -106,7 +105,7 @@ def canonicalize_tags(html_str):
                 formatted.append(f'{k}="{v}"')
             else:
                 formatted.append(k)
-        return f"<{tag_name} {' '.join(formatted)}{closing}>"
+        return f"<{tag_name} {' '.join(formatted)}>"
 
     return re.sub(r'<([a-zA-Z0-9\-]+)([^>]*?)(\s*/?)>', sort_attrs, html_str)
 
@@ -453,6 +452,9 @@ class DifferentialTester:
 
     def case_09_create_comment(self):
         """POST /articles/4/comments: Add comment to article."""
+        # Refresh article detail page to load active CSRF token from comment form
+        self.rails.request("GET", "/articles/4")
+        self.aot.request("GET", "/articles/4")
         fields_rails = {
             "comment[commenter]": "Reviewer Alice",
             "comment[body]": "Equivalence testing for comment creation.",
@@ -474,6 +476,9 @@ class DifferentialTester:
 
     def case_10_destroy_comment(self):
         """DELETE /articles/4/comments/4: Delete newly created comment."""
+        # Refresh article detail page to load active CSRF token for comment deletion
+        self.rails.request("GET", "/articles/4")
+        self.aot.request("GET", "/articles/4")
         fields_rails = {
             "_method": "delete",
             "authenticity_token": self.rails.last_csrf_token,
@@ -495,6 +500,9 @@ class DifferentialTester:
 
     def case_11_destroy_article(self):
         """DELETE /articles/4: Destroy article."""
+        # Refresh article index page to load active CSRF token for article deletion
+        self.rails.request("GET", "/articles")
+        self.aot.request("GET", "/articles")
         fields_rails = {
             "_method": "delete",
             "authenticity_token": self.rails.last_csrf_token,
