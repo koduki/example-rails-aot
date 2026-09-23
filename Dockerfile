@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for Rails to Spinel AOT binary
-# Stage 1: Build environment with full toolchain
-FROM ubuntu:24.04 AS builder
+# Stage 1: Build environment with Ruby 3.4.5 and native toolchain
+FROM ruby:3.4.5-bookworm AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CC=clang
@@ -20,9 +20,6 @@ RUN apt-get update -qq && \
       pkg-config \
       xz-utils \
       python3 \
-      ruby \
-      ruby-dev \
-      bundler \
       nodejs \
       npm && \
     rm -rf /var/lib/apt/lists/*
@@ -30,9 +27,9 @@ RUN apt-get update -qq && \
 WORKDIR /workspace
 COPY . /workspace
 
-# Install pinned Roundhouse and Spinel, install bundle dependencies, then transpile and build native binary
-RUN bash scripts/install-toolchain.sh && \
-    (cd blog && bundle install) && \
+# Install bundle dependencies, install pinned Roundhouse and Spinel, then transpile and build native binary
+RUN (cd blog && bundle install) && \
+    bash scripts/install-toolchain.sh && \
     bash scripts/build.sh
 
 # Stage 2: Minimal runtime image without Ruby, Rails, or Spinel
