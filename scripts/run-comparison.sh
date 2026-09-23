@@ -11,6 +11,7 @@ RUN_DIR="$(mktemp -d)"
 RAILS_PID=''
 AOT_PID=''
 
+ORIG_DB_BACKUP=''
 cleanup() {
   echo "[DIFF] Cleaning up processes and temporary files..."
   if test -n "$RAILS_PID"; then
@@ -21,11 +22,14 @@ cleanup() {
     kill "$AOT_PID" 2>/dev/null || true
     wait "$AOT_PID" 2>/dev/null || true
   fi
+  if test -n "$ORIG_DB_BACKUP" && test -f "$ORIG_DB_BACKUP"; then
+    mv "$ORIG_DB_BACKUP" "$ROOT/blog/storage/development.sqlite3" 2>/dev/null || true
+  fi
   rm -rf "$RUN_DIR"
 }
 trap cleanup EXIT
 
-echo "[DIFF] Setting up independent databases..."
+echo "[DIFF] Setting up isolated and identical databases..."
 mkdir -p "$RUN_DIR/rails_storage"
 mkdir -p "$RUN_DIR/aot_run/storage"
 
@@ -37,9 +41,25 @@ fi
 
 tar -xzf "$ROOT/artifacts/blog-linux-x86_64.tar.gz" -C "$RUN_DIR/aot_run"
 
-# Seed both databases identically using seed.sql
-sqlite3 "$RUN_DIR/rails_storage/development.sqlite3" < "$RUN_DIR/aot_run/db/seed.sql"
-sqlite3 "$RUN_DIR/aot_run/storage/development.sqlite3" < "$RUN_DIR/aot_run/db/seed.sql"
+# Backup existing development DB if present
+if test -f "$ROOT/blog/storage/development.sqlite3"; then
+  ORIG_DB_BACKUP="$RUN_DIR/orig_development.sqlite3"
+  mv "$ROOT/blog/storage/development.sqlite3" "$ORIG_DB_BACKUP"
+fi
+
+# Run db:prepare to build complete schema, migrations table, and seed data
+(
+  cd "$ROOT/blog"
+  bin/rails db:prepare
+)
+
+# Populate isolated databases with the exact same initial state
+cp "$ROOT/blog/storage/development.sqlite3" "$RUN_DIR/rails_storage/development.sqlite3"
+cp "$ROOT/blog/storage/development.sqlite3" "$RUN_DIR/aot_run/storage/development.sqlite3"
+
+# Link Rails development DB to the isolated test database
+rm -f "$ROOT/blog/storage/development.sqlite3"
+ln -s "$RUN_DIR/rails_storage/development.sqlite3" "$ROOT/blog/storage/development.sqlite3"
 
 RAILS_PORT=33000
 AOT_PORT=38000
@@ -49,7 +69,6 @@ echo "[DIFF] Starting Rails server on port $RAILS_PORT..."
   cd "$ROOT/blog"
   export PORT=$RAILS_PORT
   export RAILS_ENV=development
-  export DATABASE_URL="sqlite3:$RUN_DIR/rails_storage/development.sqlite3"
   exec bin/rails server -p $RAILS_PORT -b 127.0.0.1
 ) > "$REPORT_DIR/rails-server.log" 2>&1 &
 RAILS_PID=$!
