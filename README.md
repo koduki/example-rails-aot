@@ -61,3 +61,5 @@ Rails 8.1.3.1 から生成した `blog/` と lockfile をコミットしてい�
 ## 検証の範囲
 
 Rails のモデル・コントローラテストと、AOT の HTTP での一覧、無効入力、作成、詳細、SQLite 保存、再起動後の読み出しを検証します。全操作の Rails/AOT 同値性、Cable の比較、Docker イメージ配布は後続 Issue の範囲です。検証の実行結果は実際の Actions run を確認してください。
+
+現時点で create/update の JSON 分岐と未使用の mailer 宣言に変換警告が残ります。内容と影響、生成元の記録は [provenance.md](docs/provenance.md) を参照してください。
