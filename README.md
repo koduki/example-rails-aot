@@ -127,7 +127,7 @@ Ruby, Rails, Spinel を含まない軽量コンテナイメージを提供しま
 
 ### Dockerfile の特徴
 - **マルチステージビルド**:
-  - `builder`: Ubuntu 24.04 上でツールチェーンをセットアップし、AOT バイナリ `blog` をビルド。
+  - `builder`: 公式 `ruby:3.4.5-bookworm` 上でツールチェーンをセットアップし、AOT バイナリ `blog` をビルド。
   - `runtime`: Ubuntu 24.04 最小ベースにバイナリ、静的アセット、必要ライブラリ（`libsqlite3-0`, `libjemalloc2`）のみを配置。
 - **PID 1 実行**: `docker-entrypoint.sh` から `exec /app/blog` することでシグナルを正常ハンドリング。
 - **SQLite データの永続化**: `/app/storage` をボリュームとしてマウント可能。初回起動時に DB がなければ `db/seed.sql` から自動初期化。
