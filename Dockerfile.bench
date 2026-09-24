@@ -1,0 +1,63 @@
+ARG CRUBY_IMAGE=ruby:3.4.5-bookworm
+ARG JRUBY_IMAGE=jruby:10.0.7.0-jdk21
+ARG NATIVE_IMAGE=ubuntu:24.04
+FROM ${CRUBY_IMAGE} AS ruby-base
+RUN apt-get update -qq && apt-get install -y --no-install-recommends python3 nodejs clang make libsqlite3-dev libjemalloc-dev sqlite3 pkg-config && rm -rf /var/lib/apt/lists/*
+RUN gem install bundler -v 2.6.9 --no-document
+ENV BUNDLE_FROZEN=true BUNDLE_WITHOUT=development:test RAILS_ENV=production BENCH_JIT=off BLOG_DB=/tmp/assets.sqlite3 SECRET_KEY_BASE=benchmark-build-only
+WORKDIR /src
+COPY . .
+RUN python3 scripts/bench/prepare_app.py out/bench-app
+WORKDIR /src/out/bench-app
+RUN bundle install
+RUN bundle exec rails assets:precompile
+FROM ruby-base AS emit
+WORKDIR /src
+RUN bash scripts/install-toolchain.sh
+RUN bash scripts/transpile.sh ruby out/bench-app out/bench-ruby && python3 scripts/bench/emit.py out/bench-ruby ruby
+RUN bash scripts/transpile.sh jruby out/bench-app out/bench-jruby && python3 scripts/bench/emit.py out/bench-jruby jruby
+RUN bash scripts/transpile.sh spinel out/bench-app out/bench-spinel && python3 scripts/bench/emit.py out/bench-spinel spinel
+WORKDIR /src/out/bench-spinel
+RUN PATH=/src/.toolchain/bin:$PATH CC=clang spin build
+
+FROM ${CRUBY_IMAGE} AS rails-cruby
+WORKDIR /app
+COPY --from=ruby-base /usr/local/bundle /usr/local/bundle
+COPY --from=ruby-base /src/out/bench-app /app
+COPY bench/runtime /bench/runtime
+ENV BENCH_RUNTIME=cruby BENCH_SHAPE=rails BUNDLE_FROZEN=true RAILS_ENV=production
+ENTRYPOINT ["/bench/runtime/entrypoint.sh"]
+
+FROM ${JRUBY_IMAGE} AS rails-jruby
+WORKDIR /app
+COPY --from=ruby-base /src/out/bench-app /app
+RUN gem install bundler -v 2.6.9 --no-document && bundle config set frozen true && bundle install
+COPY bench/runtime /bench/runtime
+ENV BENCH_RUNTIME=jruby BENCH_SHAPE=rails RAILS_ENV=production
+ENTRYPOINT ["/bench/runtime/entrypoint.sh"]
+
+FROM ${CRUBY_IMAGE} AS emitted-cruby
+WORKDIR /app
+COPY --from=emit /src/out/bench-ruby /app
+RUN gem install bundler -v 2.6.9 --no-document && bundle config set frozen true && bundle install
+COPY bench/runtime /bench/runtime
+ENV BENCH_RUNTIME=cruby BENCH_SHAPE=emitted RAILS_ENV=production
+ENTRYPOINT ["/bench/runtime/entrypoint.sh"]
+
+FROM ${JRUBY_IMAGE} AS emitted-jruby
+WORKDIR /app
+COPY --from=emit /src/out/bench-jruby /app
+RUN gem install bundler -v 2.6.9 --no-document && bundle config set frozen true && bundle install
+COPY bench/runtime /bench/runtime
+ENV BENCH_RUNTIME=jruby BENCH_SHAPE=emitted RAILS_ENV=production
+ENTRYPOINT ["/bench/runtime/entrypoint.sh"]
+
+FROM ${NATIVE_IMAGE} AS spinel
+RUN apt-get update -qq && apt-get install -y --no-install-recommends libsqlite3-0 libjemalloc2 && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=emit /src/out/bench-spinel/build/bin/blog /app/blog
+COPY --from=emit /src/out/bench-spinel/static /app/static
+COPY --from=emit /src/out/bench-spinel/benchmark-emission.json /app/benchmark-emission.json
+COPY bench/runtime /bench/runtime
+ENV BENCH_RUNTIME=spinel BENCH_SHAPE=emitted
+ENTRYPOINT ["/bench/runtime/entrypoint.sh"]

@@ -1,0 +1,58 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    base64 (0.3.0)
+    jdbc-sqlite3 (3.46.1.1)
+    mini_portile2 (2.8.9)
+    nio4r (2.7.5)
+    nio4r (2.7.5-java)
+    puma (8.0.2)
+      nio4r (~> 2.0)
+    puma (8.0.2-java)
+      nio4r (~> 2.0)
+    rack (3.2.7)
+    sqlite3 (2.9.6)
+      mini_portile2 (~> 2.8.0)
+    sqlite3 (2.9.6-aarch64-linux-gnu)
+    sqlite3 (2.9.6-aarch64-linux-musl)
+    sqlite3 (2.9.6-arm-linux-gnu)
+    sqlite3 (2.9.6-arm-linux-musl)
+    sqlite3 (2.9.6-arm64-darwin)
+    sqlite3 (2.9.6-x86-linux-gnu)
+    sqlite3 (2.9.6-x86-linux-musl)
+    sqlite3 (2.9.6-x86_64-darwin)
+    sqlite3 (2.9.6-x86_64-linux-gnu)
+    sqlite3 (2.9.6-x86_64-linux-musl)
+    websocket-driver (0.8.0)
+      base64
+      websocket-extensions (>= 0.1.0)
+    websocket-driver (0.8.0-java)
+      base64
+      websocket-extensions (>= 0.1.0)
+    websocket-extensions (0.1.5)
+
+PLATFORMS
+  aarch64-linux-gnu
+  aarch64-linux-musl
+  arm-linux-gnu
+  arm-linux-musl
+  arm64-darwin
+  java
+  ruby
+  x86-linux-gnu
+  x86-linux-musl
+  x86_64-darwin
+  x86_64-linux
+  x86_64-linux-gnu
+  x86_64-linux-musl
+
+DEPENDENCIES
+  jdbc-sqlite3 (= 3.46.1.1)
+  nio4r (= 2.7.5)
+  puma (= 8.0.2)
+  rack (= 3.2.7)
+  sqlite3 (= 2.9.6)
+  websocket-driver (= 0.8.0)
+
+BUNDLED WITH
+   2.6.9

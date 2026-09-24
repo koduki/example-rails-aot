@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "description": "Pilot conditions; P0 uses a closed-loop plumbing driver, not a published capacity benchmark",
+  "targets": ["rails-cruby-off", "rails-cruby-yjit", "emit-cruby-off", "emit-cruby-yjit", "rails-jruby", "emit-jruby", "spinel"],
+  "endpoints": ["/articles", "/articles.json"],
+  "cpu_count": 1, "memory_mb": 3072, "threads": 3, "spinel_workers": 1,
+  "repetitions": 3, "seed": 20260924,
+  "warmup_min_seconds": 60, "warmup_max_seconds": 600,
+  "window_seconds": 15, "stable_windows": 4, "max_cv": 0.05, "max_drift": 0.05,
+  "measurement_seconds": 30, "connections": 8, "request_timeout": 5,
+  "ready_timeout": 180, "total_timeout": 7200
+}
