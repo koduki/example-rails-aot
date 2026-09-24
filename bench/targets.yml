@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "reference": "rails-cruby-off",
+  "targets": {
+    "rails-cruby-off": {"image": "rails-cruby", "runtime": "cruby", "shape": "rails", "jit": "off", "group": "main"},
+    "rails-cruby-yjit": {"image": "rails-cruby", "runtime": "cruby", "shape": "rails", "jit": "on", "group": "main"},
+    "emit-cruby-off": {"image": "emitted-cruby", "runtime": "cruby", "shape": "emitted", "jit": "off", "group": "main"},
+    "emit-cruby-yjit": {"image": "emitted-cruby", "runtime": "cruby", "shape": "emitted", "jit": "on", "group": "main"},
+    "rails-jruby": {"image": "rails-jruby", "runtime": "jruby", "shape": "rails", "jit": "jit", "group": "main"},
+    "emit-jruby": {"image": "emitted-jruby", "runtime": "jruby", "shape": "emitted", "jit": "jit", "group": "main"},
+    "spinel": {"image": "spinel", "runtime": "spinel", "shape": "emitted", "jit": "aot", "group": "main"},
+    "rails-jruby-off": {"image": "rails-jruby", "runtime": "jruby", "shape": "rails", "jit": "off", "group": "diagnostic"},
+    "emit-jruby-off": {"image": "emitted-jruby", "runtime": "jruby", "shape": "emitted", "jit": "off", "group": "diagnostic"}
+  },
+  "unsupported": {"spinel-without-roundhouse": "No supported path to compile this untransformed Rails application"}
+}

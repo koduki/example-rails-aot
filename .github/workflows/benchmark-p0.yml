@@ -1,0 +1,32 @@
+name: Benchmark P0 validation
+on:
+  pull_request:
+    paths: ['bench/**', 'scripts/bench/**', 'tests/bench/**', 'Dockerfile.bench', '.dockerignore', 'scripts/transpile.sh', 'scripts/prepare-assets.sh', '.github/workflows/benchmark-p0.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: benchmark-p0-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit and CLI contract tests
+        run: |
+          python3 -m unittest discover -s tests/bench -v
+          python3 scripts/bench/run.py run --dry-run > benchmark-plan.json
+      - name: Build all runtime images
+        run: python3 scripts/bench/run.py build --targets rails-cruby-off,rails-cruby-yjit,emit-cruby-off,emit-cruby-yjit,rails-jruby,emit-jruby,spinel,rails-jruby-off,emit-jruby-off --output bench-results/build
+      - name: Compare serving runtime, responses and database operations
+        run: python3 scripts/bench/run.py preflight --targets rails-cruby-off,rails-cruby-yjit,emit-cruby-off,emit-cruby-yjit,rails-jruby,emit-jruby,spinel,rails-jruby-off,emit-jruby-off --output bench-results/preflight
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-p0-${{ github.sha }}
+          path: |
+            bench-results/
+            benchmark-plan.json
+          retention-days: 14

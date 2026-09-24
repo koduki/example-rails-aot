@@ -1,0 +1,11 @@
+production:
+  adapter: sqlite3
+  database: <%= ENV.fetch("BLOG_DB") %>
+  pool: <%= ENV.fetch("RAILS_MAX_THREADS", "3") %>
+  timeout: 5000
+  pragmas:
+    journal_mode: wal
+    synchronous: normal
+    foreign_keys: true
+    cache_size: -65536
+    mmap_size: 268435456
