@@ -199,6 +199,9 @@ python3 scripts/bench/run.py run --profile bench/profiles/crud.yml \
 ```
 
 On pull requests the benchmark workflow runs both short CRUD scenarios after
-the read smoke trial. They check correctness and the runner path; the hosted
+the read smoke trial (2 operations/s for read/update, 1 operation/s for
+create/delete). These low rates keep the slowest Rails/JRuby baseline within
+the test's timeout; a trial with zero writes or dropped operations is rejected.
+They check correctness and the runner path; the hosted
 runner's single short trial does not establish a capacity ratio. Repeat the
 workload with controlled arrival rates on a dedicated host for that claim.

@@ -17,7 +17,7 @@
   "k6_script": "bench/k6/crud.js",
   "crud_scenario": "create_delete",
   "fixture_articles": 100,
-  "offered_rps": 20,
+  "offered_rps": 1,
   "cpu_count": 1,
   "memory_mb": 3072,
   "threads": 3,

@@ -425,7 +425,14 @@ def trials(p, cpus, output, checks):
                         err_rate = failed_reqs / total_reqs if total_reqs > 0 else 0.0
                         operations = measured.get('operations', {})
                         has_errors = (succ_reqs == 0) or (err_rate > p.get('max_error_rate', 0.05)) or (
-                            operations.get('failed', 0) > 0)
+                            operations.get('failed', 0) > 0) or measured.get('client_saturated', False) or (
+                            measured.get('iterations_dropped', 0) > 0)
+                        if p.get('k6_script') == 'bench/k6/crud.js':
+                            scenario = p.get('crud_scenario', 'mix')
+                            if scenario != 'read':
+                                has_errors = has_errors or operations.get('writes', 0) == 0
+                            if scenario == 'mix':
+                                has_errors = has_errors or operations.get('reads', 0) == 0
                         final_status = 'failed' if has_errors else ('unstable' if not ready else 'passed')
                         row.update(status=final_status, measurement=measured, telemetry=telemetry)
                         if diag_data:

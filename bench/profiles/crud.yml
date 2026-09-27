@@ -7,7 +7,7 @@
   "k6_script": "bench/k6/crud.js",
   "crud_scenario": "mix",
   "fixture_articles": 100,
-  "offered_rps": 20,
+  "offered_rps": 2,
   "cpu_count": 1, "memory_mb": 3072, "threads": 3, "spinel_workers": 1,
   "repetitions": 1, "seed": 20260924,
   "warmup_min_seconds": 10, "warmup_max_seconds": 45,
