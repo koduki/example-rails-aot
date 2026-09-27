@@ -1,0 +1,170 @@
+# Rails / Roundhouse / Spinel ベンチマーク実行契約と運用手順書
+
+更新日：2026-09-27  
+対象マイルストーン：Issue [#19](https://github.com/koduki/example-rails-aot/issues/19)（GCE へ移せる実行契約・full 設定・再現手順）
+
+> [!IMPORTANT]
+> **GCE 実行に関する事前明記（未検証の境界）**:
+> 本文書に記載する GCE（Google Compute Engine）構成および環境テンプレートは、**将来の専用インスタンス移行に向けた実行契約・設計仕様**です。現時点では GCE インスタンスの実作成・本測定は実施しておらず、**Linux x86-64 + Docker 実行契約に基づくスタンドアロン環境および GitHub Actions runner 上で検証済み**です。専用環境での検証済みと混同しないでください。
+
+---
+
+## 1. システム実行契約 (Execution Contract)
+
+本ベンチマークスイートは、特定の CI サービスやクラウドプロバイダに依存しない **Linux x86-64 + Docker** を唯一の標準実行基盤とします。
+
+### 1.1 前提環境要件
+| 項目 | 要件 | 理由・備考 |
+| --- | --- | --- |
+| **OS / アーキテクチャ** | Linux x86-64 (Ubuntu 24.04 LTS 推奨) | Docker コンテナ内の各ランタイムバイナリ・glibc 互換性 |
+| **Linux カーネル** | 6.x 以上 | cgroups v2 の完全サポート |
+| **cgroups** | cgroups v2 統一階層 (`/sys/fs/cgroup`) | `cpu.stat`, `cpu.max`, `cpuset.cpus.effective`, `memory.current`, `memory.peak` の正確なメトリクス取得 |
+| **コンテナエンジン** | Docker Engine 24.0 以上 | BuildKit サポート、cpuset/memory 制限フラグのサポート |
+| **Python** | Python 3.10 以上 | 標準ライブラリのみで CLI (`scripts/bench/run.py`, `report.py`, `diagnostic.py`) が稼働 |
+| **負荷生成器** | Grafana k6 v0.48+ (または Docker `grafana/k6:latest`) | Open arrival rate による offered RPS 維持と飽和検知 |
+
+### 1.2 ホスト資源の排他的分離契約
+1. **CPU の完全分離 (CPU Pinning)**:
+   - アプリケーションサーバーコンテナと負荷生成器（k6）は、同一物理コアの SMT スレッドを含めて競合しないよう、排他的な CPU セットに固定（Pin）する必要があります。
+   - `allocation()` 関数により、`set(app_cpus) & set(load_cpus) == empty` かつシステム許容 CPU 範囲内であることが強制されます。
+2. **メモリ予算 (Memory Budget)**:
+   - コンテナごとに `--memory` および `--memory-swap` を同値に設定し、スワップアウトによるレイテンシの歪みを抑止します（デフォルト: 3072 MB〜4096 MB）。
+3. **スタンドアロン CLI 動作**:
+   - `GITHUB_*` や `CI` 等の環境変数が一切存在しない環境でも、CLI 引数および環境ファイル (`--env-file`) のみで全工程（build, preflight, run, report）が実行可能です。
+
+---
+
+## 2. 測定プロファイルと所要時間見積もり
+
+すべての測定は同一のオーケストレーションロジック (`scripts/bench/run.py`) と結果スキーマを通ります。プロファイルにより反復回数、ウォームアップ、測定時間を切り替えます。
+
+### 2.1 プロファイル一覧
+| プロファイル | 用途 | 反復 | 対象 endpoint | ウォームアップ (min/max) | 測定時間 | 想定総時間 |
+| --- | --- | --- | --- | --- | --- | --- |
+| **`smoke.yml`** | PR CI パイプライン検証 | 1 | `/articles` (1 系統) | 10s / 45s | 10s | 約 3〜5 分 |
+| **`quick.yml`** | Actions 手動ディスパッチ比較 | 3 | `/articles`, `/articles.json` (2 系統) | 60s / 600s | 30s | 約 30〜60 分 |
+| **`diagnostic.yml`** | JIT 相互作用診断 (Issue #18) | 1 | `/articles` (1 系統) | 15s / 60s | 15s | 約 10〜15 分 |
+| **`full.yml`** | 専用ホスト向け本測定 (Issue #19) | 5 | 全 5 系統 (HTML 3, JSON 2) | 180s / 900s | 120s | 約 6〜10 時間 |
+
+### 2.2 `full.yml` の所要時間見積もり式
+試行総数 $N_{trials}$ は以下で計算されます：
+$$N_{trials} = N_{targets} \times N_{endpoints} \times N_{repetitions}$$
+`full.yml` の場合：
+$$N_{trials} = 7 \text{ targets} \times 5 \text{ endpoints} \times 5 \text{ repetitions} = 175 \text{ trials}$$
+
+1 試行あたりの最大所要時間 $T_{trial,max}$：
+$$T_{trial,max} = T_{ready\_timeout} + T_{warmup,max} + T_{measurement} + T_{cleanup}$$
+$$T_{trial,max} = 180\text{s} + 900\text{s} + 120\text{s} + 15\text{s} = 1,215\text{s} \approx 20.25\text{ 分}$$
+
+最悪ケースの理論上限総時間：
+$$T_{total,max} = 175 \times 1,215\text{s} = 212,625\text{s} \approx 59\text{ 時間}$$
+
+実際の所要時間は、早期に安定判定（`stable_windows: 4`, CV $\le 0.05$, drift $\le 0.05$）を満たしてウォームアップが最短時間（$T_{warmup,min} = 180\text{s}$）で完了するため、想定期待所要時間は以下の通りとなります：
+$$T_{trial,expected} = 30\text{s (起動)} + 180\text{s (ウォームアップ)} + 120\text{s (測定)} + 10\text{s (回収)} = 340\text{s} \approx 5.67\text{ 分}$$
+$$T_{total,expected} = 175 \times 340\text{s} \approx 59,500\text{s} \approx 9.9\text{ 時間}$$
+
+このため、`full.yml` の全体タイムアウトは **`total_timeout: 43200`（12 時間）** に設定されており、予算超過時は残りの試行が `not_run` として記録され、測定データが安全に保護されます。
+
+---
+
+## 3. 設定ファイルと環境テンプレート
+
+CLI 引数または環境設定ファイル（`--env-file`）を用いて、実行パラメータを柔軟に設定できます。
+
+### 3.1 ディレクトリ構成
+```
+bench/
+├── profiles/
+│   ├── smoke.yml           # CI 向け最小検証
+│   ├── quick.yml           # 短時間パイロット比較
+│   ├── diagnostic.yml      # JRuby ON/OFF・YJIT 診断
+│   └── full.yml            # 専用機向け本測定
+└── environments/
+    ├── local-single-host.env   # 単一ホスト（ローカル/オンプレミス）
+    ├── remote-loadgen.env      # 分散ホスト（別ホスト負荷生成）
+    └── gce-c3-standard-4.env   # GCE c3-standard-4 テンプレート
+```
+
+### 3.2 環境変数一覧
+| 変数名 | CLI オプション | 説明 | 例 |
+| --- | --- | --- | --- |
+| `BENCH_PROFILE` | `--profile` | 使用するプロファイルファイルパス | `bench/profiles/full.yml` |
+| `BENCH_TARGETS` | `--targets` | 測定対象（カンマ区切り、省略時はプロファイル準拠） | `rails-cruby-off,spinel` |
+| `BENCH_OUTPUT` | `--output` | 測定成果物の出力ディレクトリ | `bench-results/gce-run-01` |
+| `BENCH_APP_CPUS` | `--app-cpus` | アプリケーションコンテナ用 CPU ID | `0` |
+| `BENCH_LOAD_CPUS` | `--load-cpus` | 負荷生成器用 CPU ID | `1,2,3` |
+| `BENCH_MEMORY_MB` | `--memory-mb` | コンテナメモリ上限値 (MB) | `4096` |
+| `BENCH_TARGET_HOST` | `--target-host` | 負荷投入先ホスト名/IP（外部公開時） | `10.0.0.10` または `127.0.0.1` |
+| `BENCH_SEED` | `--seed` | 試行順序シャッフルの乱数シード | `20260924` |
+
+---
+
+## 4. スタンドアロン実行手順（GitHub Actions 非依存）
+
+ホスト上で直接、またはコンテナラッパーを用いて完全にスタンドアロンで実行・再集計する手順です。
+
+### 4.1 CLI による直接実行
+```bash
+# 1. イメージのビルド
+python3 scripts/bench/run.py build --output bench-results/build
+
+# 2. 事前検証 (Preflight: 機能・DB・PRAGMA 一致確認)
+python3 scripts/bench/run.py preflight --output bench-results/preflight
+
+# 3. 本測定の実行 (環境設定ファイルを指定)
+python3 scripts/bench/run.py run \
+  --env-file bench/environments/local-single-host.env \
+  --preflight-file bench-results/preflight/preflight.json \
+  --output bench-results/run-01
+
+# 4. レポートの生成・再集計
+python3 scripts/bench/report.py bench-results/run-01
+```
+
+### 4.2 コンテナラッパーによる実行
+OS 依存（PowerShell / Linux shell）を吸収するラッパースクリプトも提供されています：
+- **Linux / macOS**: `./scripts/run-bench-container.sh`
+- **Windows (PowerShell)**: `.\scripts\run-bench-container.ps1`
+
+### 4.3 成果物からの再集計契約
+レポート生成スクリプト (`report.py`, `diagnostic.py`) は、**生成果物ディレクトリのみから完全に入力状態を再構築**します：
+```bash
+python3 scripts/bench/report.py bench-results/run-01
+python3 scripts/bench/diagnostic.py bench-results/run-01
+```
+出力成果物：
+- `summary.json`: 集計データ、SLO 達成状況、対比較倍率
+- `summary.md`: GitHub Flavored Markdown 形式のレポートテーブル
+- `summary.csv`: 機械可読な全 endpoint メトリクス一覧
+- `diagnostics.md` / `diagnostics.json`: JIT 内部統計およびウォームアップ推移解析
+
+---
+
+## 5. 将来の GCE 移行計画と実行契約 (GCE Runbook)
+
+将来 GCE インスタンス上で本測定を実施する際の技術仕様および運用チェックリストです。
+
+### 5.1 推奨マシンタイプ
+- **`c3-standard-4`** (4 vCPU, 16 GB メモリ, Intel Xeon Sapphire Rapids)
+- **`c3-standard-8`** (8 vCPU, 32 GB メモリ, Intel Xeon Sapphire Rapids)
+> **選定理由**: C3 シリーズは最新の NUMA 最適化と安定した L3 キャッシュスループットを提供し、共有コア型（E2/N2 の低構成）に比べてバックグラウンドの CPU スティールやクロック変動ノイズが極めて小さいため。
+
+### 5.2 CPU トポロジと SMT の考慮
+- GCE の vCPU はハードウェアハイパースレッド（SMT）として提供されます。
+- 例：`c3-standard-4` の場合、物理コア 2 個 × 2 スレッド = 4 vCPU。
+  - Core 0: vCPU 0, vCPU 2
+  - Core 1: vCPU 1, vCPU 3
+- **推奨ピン留め戦略**:
+  - アプリケーションコンテナ：`vCPU 0`（単一コア、スレッド干渉回避）
+  - 負荷生成器（k6）：`vCPU 1, 3`（別物理コア全体を使用）
+  - システムデーモン：`vCPU 2`
+
+### 5.3 GCE 実行時に記録すべきテレメトリ項目チェックリスト
+GCE 測定を実施する際は、結果の信頼性を担保するため、以下のシステム構成情報を `env.json` に記録します：
+- [ ] **マシン仕様**: マシンタイプ、ゾーン、CPU モデル名（`lscpu` / `/proc/cpuinfo`）
+- [ ] **トポロジ**: NUMA ノード構成（`numactl -H`）、SMT スレッド配置（`/sys/devices/system/cpu/cpu*/topology/thread_siblings_list`）
+- [ ] **OS & カーネル**: ディストリビューションバージョン、`uname -a`、カーネルブートパラメータ
+- [ ] **cgroups 構成**: cgroups v2 マウント状態、コントローラー有効化状態
+- [ ] **ストレージ**: ディスク種類（Hyperdisk Balanced / pd-ssd）、マウントオプション、WAL 性能
+- [ ] **ネットワーク**: 分散構成時の内部 VPC レイテンシ（`ping -c 100` のジッター測定）
+- [ ] **バックグラウンドノイズ**: 測定前後の idle CPU 使用率（0.5% 以下であることを確認）
