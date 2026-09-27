@@ -34,6 +34,30 @@ def instrument(output, target):
     path.write_text(text)
     changes = {'runtime/db.rb': {'before': hashlib.sha256(before).hexdigest(),
                                 'after': hashlib.sha256(path.read_bytes()).hexdigest()}}
+    # Rails 8 hidden fields include autocomplete=off. Repair the emitted helper,
+    # rather than teaching the comparison to ignore the missing attribute.
+    helper = output / 'runtime/action_view/view_helpers.rb'
+    before_helper = helper.read_bytes()
+    updated = before_helper.decode()
+    for name in ('authenticity_token', '_method'):
+        old = '<input type="hidden" name="' + name + '"'
+        if old not in updated:
+            raise ValueError('Pinned hidden-field helper changed: ' + name)
+        updated = updated.replace(old, '<input autocomplete="off" type="hidden" name="' + name + '"')
+    helper.write_text(updated)
+    changes['runtime/action_view/view_helpers.rb'] = {
+        'before': hashlib.sha256(before_helper).hexdigest(),
+        'after': hashlib.sha256(helper.read_bytes()).hexdigest()}
+    # CRuby's thread-local helper is loaded after view_helpers and overrides
+    # csrf_token_hidden_input, so repair the serving implementation as well.
+    thread_helper = output / 'runtime/thread_state.rb'
+    before_thread = thread_helper.read_bytes()
+    thread_helper.write_text(replace_once(before_thread.decode(),
+        '<input type="hidden" name="authenticity_token"',
+        '<input autocomplete="off" type="hidden" name="authenticity_token"'))
+    changes['runtime/thread_state.rb'] = {
+        'before': hashlib.sha256(before_thread).hexdigest(),
+        'after': hashlib.sha256(thread_helper.read_bytes()).hexdigest()}
     if target != 'spinel':
         shutil.copyfile(ROOT / 'bench/emitted.Gemfile', output / 'Gemfile')
         shutil.copyfile(ROOT / 'bench/emitted.Gemfile.lock', output / 'Gemfile.lock')
@@ -75,7 +99,7 @@ def instrument(output, target):
                               'after': hashlib.sha256(path.read_bytes()).hexdigest()}
     (output / 'benchmark-emission.json').write_text(json.dumps({
         'target': target, 'patches': changes,
-        'purpose': 'Equal per-connection SQLite pragmas and unmeasured runtime probe; no business changes'
+        'purpose': 'Equal per-connection SQLite pragmas, unmeasured runtime probe, Rails-compatible hidden-field attributes'
     }, indent=2) + '\n')
 
 if __name__ == '__main__':

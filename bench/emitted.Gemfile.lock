@@ -2,8 +2,12 @@ GEM
   remote: https://rubygems.org/
   specs:
     base64 (0.3.0)
+    bigdecimal (4.1.3)
+    bigdecimal (4.1.3-java)
+    concurrent-ruby (1.3.8)
     jdbc-sqlite3 (3.46.1.1)
-    mini_portile2 (2.8.9)
+    json (2.9.1)
+    json (2.9.1-java)
     nio4r (2.7.5)
     nio4r (2.7.5-java)
     puma (8.0.2)
@@ -11,8 +15,6 @@ GEM
     puma (8.0.2-java)
       nio4r (~> 2.0)
     rack (3.2.7)
-    sqlite3 (2.9.6)
-      mini_portile2 (~> 2.8.0)
     sqlite3 (2.9.6-aarch64-linux-gnu)
     sqlite3 (2.9.6-aarch64-linux-musl)
     sqlite3 (2.9.6-arm-linux-gnu)
@@ -23,10 +25,10 @@ GEM
     sqlite3 (2.9.6-x86_64-darwin)
     sqlite3 (2.9.6-x86_64-linux-gnu)
     sqlite3 (2.9.6-x86_64-linux-musl)
-    websocket-driver (0.8.0)
+    websocket-driver (0.8.2)
       base64
       websocket-extensions (>= 0.1.0)
-    websocket-driver (0.8.0-java)
+    websocket-driver (0.8.2-java)
       base64
       websocket-extensions (>= 0.1.0)
     websocket-extensions (0.1.5)
@@ -38,7 +40,6 @@ PLATFORMS
   arm-linux-musl
   arm64-darwin
   java
-  ruby
   x86-linux-gnu
   x86-linux-musl
   x86_64-darwin
@@ -47,12 +48,43 @@ PLATFORMS
   x86_64-linux-musl
 
 DEPENDENCIES
+  base64 (= 0.3.0)
+  bigdecimal (= 4.1.3)
+  concurrent-ruby (= 1.3.8)
   jdbc-sqlite3 (= 3.46.1.1)
+  json (= 2.9.1)
   nio4r (= 2.7.5)
   puma (= 8.0.2)
   rack (= 3.2.7)
   sqlite3 (= 2.9.6)
-  websocket-driver (= 0.8.0)
+  websocket-driver (= 0.8.2)
+
+CHECKSUMS
+  base64 (0.3.0) sha256=27337aeabad6ffae05c265c450490628ef3ebd4b67be58257393227588f5a97b
+  bigdecimal (4.1.3) sha256=61ebe1e5e559bdc3cc6f2c0ee7f427321fc838f59611c294356eb04d6e21cf66
+  bigdecimal (4.1.3-java) sha256=9a6a1fa67723a27ab1b3a6d5526322d8c82170af03199da7c915b8d9a1770532
+  concurrent-ruby (1.3.8) sha256=b2f1be836e968ccc78ccfce277ea79c72a88633f22306782c16ff23fb415d1e1
+  jdbc-sqlite3 (3.46.1.1) sha256=2498fea7d37c0d51c6bad1b95ffc909173c014ba6bd36825f37910113d0230cf
+  json (2.9.1) sha256=d2bdef4644052fad91c1785d48263756fe32fcac08b96a20bb15840e96550d11
+  json (2.9.1-java) sha256=88de8c79b54fee6ae1b4854bc48b8d7089f524cbacaf4596df24f86b10896ee8
+  nio4r (2.7.5) sha256=6c90168e48fb5f8e768419c93abb94ba2b892a1d0602cb06eef16d8b7df1dca1
+  nio4r (2.7.5-java) sha256=d14779d2a9b012ec0148a53344fbb2ed2a3c4d90c5dd923bf281135ab983b2c9
+  puma (8.0.2) sha256=c8ed871dfbbe66448ea9ffd46692342d9804d4071522b52b5331b7b6e7b686fb
+  puma (8.0.2-java) sha256=37392e0dbd01e2a157748b92b818bfacf801bb32628e41680e9ab1171dea2b3d
+  rack (3.2.7) sha256=93e13e1c24f93556671d85d2d79fa228c3485815c50d7e2f265b5330c6528fb7
+  sqlite3 (2.9.6-aarch64-linux-gnu) sha256=d8b1f7d23efd7abac285775a9566562fc7debfef79d594e3a20354406fb7907c
+  sqlite3 (2.9.6-aarch64-linux-musl) sha256=3579e1c98cdc7ff5c3722847bb63ed4e1efb7ff675cb5e1e48ef2d4da5fb3bc9
+  sqlite3 (2.9.6-arm-linux-gnu) sha256=33541500e3615da02afe54a9cc38b17a6985d3cf9d8b76d6d0a83002f114e7ec
+  sqlite3 (2.9.6-arm-linux-musl) sha256=c5490af48bb228fefa54314e9541375c3907e70f8109f3881b5ff97e1c93ae33
+  sqlite3 (2.9.6-arm64-darwin) sha256=849b5d7f795e60fe25076d62c72dd722beb45b3850b516ad978d60ee848ec15b
+  sqlite3 (2.9.6-x86-linux-gnu) sha256=fbaa9f46f9708f57dd8a459b37fc269f9613e0cacf1547df01aa439cc45c20c0
+  sqlite3 (2.9.6-x86-linux-musl) sha256=6715026fbb5530e810b28ef43b9c4f84cd3c991f67b9d808a31fcc32b847abbd
+  sqlite3 (2.9.6-x86_64-darwin) sha256=b5842fea77781c14da03fa7bc0feb82db03a69e135affcb6f5399cbd2797a5f3
+  sqlite3 (2.9.6-x86_64-linux-gnu) sha256=613188ce02f614126ddbc38c5e217ccffd6306d0dcd9adca9764547aa890a634
+  sqlite3 (2.9.6-x86_64-linux-musl) sha256=d493b11818a3573387a1d56e1ee8fa00da23a683a7a1cc063e7a0feeed843abf
+  websocket-driver (0.8.2) sha256=97c556b019bf3410b4961002ac501621e9322d3f8a7bc02161a09301cc4c4146
+  websocket-driver (0.8.2-java) sha256=f60120d1377cccf24100bcd1ebc25ceea6f3d5a013fc8e9d16b721016200946e
+  websocket-extensions (0.1.5) sha256=1c6ba63092cda343eb53fc657110c71c754c56484aad42578495227d717a8241
 
 BUNDLED WITH
    2.6.9

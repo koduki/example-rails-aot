@@ -17,7 +17,13 @@ roundhouse check --continue "$APP" 2>&1 | tee reports/analysis.log
 # Always generate a clean tree. No survey/stub flags are used for emission.
 rm -rf "$OUTPUT"
 roundhouse --target "$TARGET" -o "$OUTPUT" "$APP" 2>&1 | tee reports/transpile.log
-if [[ "$TARGET" = spinel ]]; then test -f "$OUTPUT/spin.toml"; fi
+if [[ "$TARGET" = spinel ]]; then
+  test -f "$OUTPUT/spin.toml"
+else
+  # The Ruby/JRuby emitter leaves asset building to rake; reuse the same built assets.
+  mkdir -p "$OUTPUT/static/assets"
+  cp -a "$ROUNDHOUSE_ASSETS_DIR/." "$OUTPUT/static/assets/"
+fi
 test -f "$OUTPUT/db/seed.sql"
 test -s "$OUTPUT/static/assets/tailwind.css"
 test -s "$OUTPUT/static/assets/turbo.min.js"

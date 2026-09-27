@@ -1,10 +1,12 @@
 require 'json'
+require 'jruby' if RUBY_ENGINE == 'jruby'
+app_root = ENV.fetch('BENCH_APP_ROOT', '/app')
 if ENV.fetch('BENCH_SHAPE') == 'rails'
-  require '/app/config/environment'
+  require File.join(app_root, 'config/environment')
   application = Rails.application
 else
-  application = Rack::Builder.parse_file('/app/config.ru')
+  application = Rack::Builder.parse_file(File.join(app_root, 'config.ru'))
 end
-require '/bench/runtime/probe'
+require_relative 'probe'
 use BenchProbe
 run application

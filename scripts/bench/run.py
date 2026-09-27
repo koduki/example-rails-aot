@@ -145,16 +145,16 @@ class Server:
             self.__exit__(*sys.exc_info())
             raise
     def __exit__(self, *_):
-        # Always remove the exact container this trial created; preserve its data and logs.
-        command(['docker','logs',self.name],log=self.directory/'server.log',check=False)
-        raw = command(['docker','inspect',self.name],check=False)
+        # Cleanup cannot be skipped by a failed log/inspect call.
         try:
-            inspect = json.loads(raw)[0]
-            save(self.directory/'container.json', {'image':inspect['Image'],'state':inspect['State'],
-                 'host_config':{k:inspect['HostConfig'].get(k) for k in ('CpusetCpus','Memory','MemorySwap')}})
-        except (ValueError,KeyError,IndexError):
-            pass
-        command(['docker','rm','-f',self.name],check=False)
+            with contextlib.suppress(OSError, RuntimeError, subprocess.TimeoutExpired):
+                command(['docker','logs',self.name],log=self.directory/'server.log',check=False,timeout=30)
+            with contextlib.suppress(OSError, RuntimeError, subprocess.TimeoutExpired, ValueError, KeyError, IndexError):
+                inspect = json.loads(command(['docker','inspect',self.name],check=False,timeout=30))[0]
+                save(self.directory/'container.json', {'image':inspect['Image'],'state':inspect['State'],
+                     'host_config':{k:inspect['HostConfig'].get(k) for k in ('CpusetCpus','Memory','MemorySwap')}})
+        finally:
+            command(['docker','rm','-f',self.name],check=False,timeout=30)
 
 def build(names, output):
     builds = []

@@ -65,6 +65,9 @@ def canonical(response, expect_json=False):
     if expect_json and media != 'application/json':
         raise ValueError(f'Expected application/json, got {media}')
     body = response['body']
+    if 300 <= response['status'] < 400 and response.get('location'):
+        return {'status': response['status'], 'media_type': media,
+                'location': relative(response['location']), 'body': '<redirect-body-not-compared>'}
     if media == 'application/json':
         body = json_value(json.loads(body))
     elif media == 'text/html':
@@ -150,6 +153,21 @@ def capture(base_url, database, target):
                 raise ValueError(f'Unexpected HTTP {response["status"]}; expected {statuses}')
             if name.endswith('invalid') and before != after:
                 raise ValueError('Invalid write changed database')
+            if name == 'create':
+                new = [r for r in after['articles'] if r['id'] not in {r['id'] for r in before['articles']}]
+                if len(new) != 1 or new[0]['title'] != fields['article[title]'] or new[0]['body'] != fields['article[body]']:
+                    raise ValueError('Create did not persist exactly one matching article')
+            elif name == 'update':
+                updated = [r for r in after['articles'] if r['id'] == int(path.rsplit('/',1)[1])]
+                if len(updated) != 1 or updated[0]['title'] != fields['article[title]'] or updated[0]['body'] != fields['article[body]']:
+                    raise ValueError('Update did not persist the requested fields')
+            elif name == 'comment_delete':
+                if any(r['id'] == int(path.rsplit('/',1)[1]) for r in after['comments']):
+                    raise ValueError('Comment was not deleted')
+            elif name == 'delete':
+                resource = int(path.rsplit('/',1)[1])
+                if any(r['id'] == resource for r in after['articles']) or any(r['article_id'] == resource for r in after['comments']):
+                    raise ValueError('Article or its dependent comments survived deletion')
             item['canonical'] = canonical(response, expect_json)
             item['canonical_db'] = canonical_db(after, initial, start, time.time())
             item['status'] = 'passed'

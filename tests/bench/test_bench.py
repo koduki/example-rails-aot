@@ -91,3 +91,27 @@ class BenchmarkTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class LifecycleTests(unittest.TestCase):
+    def test_cleanup_even_when_log_collection_fails(self):
+        from unittest.mock import patch
+        import subprocess
+        p = run.config(ROOT/'bench/profiles/quick.yml')
+        with tempfile.TemporaryDirectory() as directory:
+            server = run.Server('rails-cruby-off',directory,p,{'app':[0],'client':[1]})
+            calls = []
+            def fake_command(args, **kwargs):
+                calls.append(args)
+                if args[1] == 'logs':
+                    raise subprocess.TimeoutExpired(args, 30)
+                return '[]'
+            with patch.object(run, 'command', side_effect=fake_command):
+                server.__exit__(None,None,None)
+            self.assertEqual(calls[-1][:3], ['docker','rm','-f'])
+
+    def test_cpu_overlap_is_rejected(self):
+        from unittest.mock import patch
+        p=run.config(ROOT/'bench/profiles/quick.yml')
+        with patch.object(run.os,'sched_getaffinity',return_value={0,1}):
+            with self.assertRaises(ValueError): run.allocation(p,'0','0')
+            self.assertEqual(run.allocation(p)['client'],[1])
