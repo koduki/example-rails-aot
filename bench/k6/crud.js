@@ -10,6 +10,7 @@ const readOperations = new Counter('read_operations');
 const writeOperations = new Counter('write_operations');
 const readDuration = new Trend('read_duration_ms', true);
 const writeDuration = new Trend('write_duration_ms', true);
+const operationDuration = new Trend('operation_duration_ms', true);
 
 const rate = Number(__ENV.RATE || 20); // offered operations per second
 const duration = __ENV.DURATION || '30s';
@@ -80,6 +81,7 @@ export default function () {
     const res = http.get(readUrl, { headers: defaultHeaders, timeout: timeout, redirects: 5 });
     const elapsed = Date.now() - start;
     readDuration.add(elapsed);
+    operationDuration.add(elapsed);
 
     const ok = check(res, {
       'read status 200': (r) => r.status === 200,
@@ -133,6 +135,7 @@ export default function () {
 
       const elapsed = Date.now() - start;
       writeDuration.add(elapsed);
+      operationDuration.add(elapsed);
 
       const ok = check(createRes, {
         'create redirect with id': (r) => (r.status === 302 || r.status === 303) && Boolean(createdId),
@@ -174,6 +177,7 @@ export default function () {
 
       const elapsed = Date.now() - start;
       writeDuration.add(elapsed);
+      operationDuration.add(elapsed);
 
       const ok = check(patchRes, {
         'update redirects to article': (r) => (r.status === 302 || r.status === 303) &&
@@ -205,6 +209,7 @@ export function handleSummary(data) {
 
   const readDur = metrics.read_duration_ms ? metrics.read_duration_ms.values : {};
   const writeDur = metrics.write_duration_ms ? metrics.write_duration_ms.values : {};
+  const operationDur = metrics.operation_duration_ms ? metrics.operation_duration_ms.values : {};
 
   const testDurationSec = data.state && data.state.testRunDurationMs
     ? (data.state.testRunDurationMs / 1000) : Number.parseInt(duration, 10);
@@ -266,6 +271,16 @@ export function handleSummary(data) {
       p95: writeDur['p(95)'] || 0,
       p99: writeDur['p(99)'] || 0,
       max: writeDur.max || 0,
+    },
+    operation_latency_ms: {
+      min: operationDur.min || 0,
+      avg: operationDur.avg || 0,
+      med: operationDur.med || 0,
+      p50: operationDur.med || 0,
+      p90: operationDur['p(90)'] || 0,
+      p95: operationDur['p(95)'] || 0,
+      p99: operationDur['p(99)'] || 0,
+      max: operationDur.max || 0,
     },
     client_saturated: (dropped.count || 0) > 0 || (vus.max || 0) >= maxVUs,
     raw: data,

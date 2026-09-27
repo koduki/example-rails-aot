@@ -62,7 +62,19 @@ def summarize_series(values):
         'iqr': round(q3 - q1, 2),
     }
 
-def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_error_rate):
+def operation_metrics(measurement):
+    """Return the unit of work actually offered to k6 for a CRUD trial."""
+    operations = measurement.get('operations', {})
+    latency = measurement.get('operation_latency_ms', {})
+    if (measurement.get('driver') != 'k6-crud' or
+            operations.get('ops_successful_rate') is None or
+            not all(latency.get(k) is not None for k in ('p50', 'p95')) or
+            not isinstance(latency.get('p99'), (int, float)) or latency['p99'] <= 0):
+        return None
+    return operations['ops_successful_rate'], latency, operations
+
+def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_error_rate,
+                              crud_workload=False):
     """Aggregate metrics across valid repetitions for a single target and endpoint."""
     target_checks = checks.get(target, {})
     eligible_endpoints = target_checks.get('eligible_endpoints', [])
@@ -95,6 +107,11 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
             excluded_repetitions.append({'repetition': t.get('repetition'), 'reason': 'Client saturated (dropped iterations)'})
             continue
 
+        if crud_workload and operation_metrics(measurement) is None:
+            excluded_repetitions.append({'repetition': t.get('repetition'),
+                'reason': 'Missing CRUD operation rate or latency; HTTP request metrics are not operation metrics'})
+            continue
+
         valid_repetitions.append(t)
 
     # Extract metrics from valid repetitions
@@ -108,10 +125,11 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
 
     for t in valid_repetitions:
         m = t.get('measurement', {})
-        rps = m.get('rps_successful') or m.get('rps') or 0.0
+        operation = operation_metrics(m) if crud_workload else None
+        rps = operation[0] if operation else (m.get('rps_successful') or m.get('rps') or 0.0)
         rps_list.append(rps)
 
-        lat = m.get('latency_ms', {})
+        lat = operation[1] if operation else m.get('latency_ms', {})
         p50 = lat.get('p50') or lat.get('med') or m.get('p50_ms') or 0.0
         p95 = lat.get('p95') or m.get('p95_ms') or 0.0
         p99 = lat.get('p99') or m.get('p99_ms') or 0.0
@@ -119,8 +137,10 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
         p95_list.append(p95)
         p99_list.append(p99)
 
-        total_reqs = m.get('requests_total') or ((m.get('successful', 0) + m.get('errors', 0)) or 1)
-        failed_reqs = m.get('requests_failed') if 'requests_failed' in m else m.get('errors', 0)
+        total_reqs = operation[2].get('total', 0) if operation else (
+            m.get('requests_total') or ((m.get('successful', 0) + m.get('errors', 0)) or 1))
+        failed_reqs = operation[2].get('failed', 0) if operation else (
+            m.get('requests_failed') if 'requests_failed' in m else m.get('errors', 0))
         err_rate = failed_reqs / total_reqs if total_reqs > 0 else 0.0
         error_rate_list.append(err_rate)
 
@@ -150,6 +170,7 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
         'target': target,
         'endpoint': endpoint,
         'is_eligible': is_eligible,
+        'metric_basis': 'operation' if crud_workload else 'http_request',
         'valid_repetition_count': len(valid_repetitions),
         'verified_repetition_count': len(verified_repetitions),
         'excluded_repetition_count': len(excluded_repetitions),
@@ -245,16 +266,22 @@ def generate_markdown_report(report_data):
     lines.append('# Benchmark P1 Pairwise Comparison Report\n')
     lines.append('> [!NOTE]')
     lines.append('> Metrics represent **medians across valid repetitions** under the recorded workload.')
+    crud_workload = report_data.get('metric_basis') == 'operation'
     if report_data.get('fixed_offered_rate'):
-        lines.append('> Fixed offered RPS measures latency, error rate and resources at that load; it does not establish maximum capacity or JIT throughput speedups.')
+        rate_unit = 'operation rate' if crud_workload else 'RPS'
+        lines.append(f'> Fixed offered {rate_unit} measures latency, error rate and resources at that load; it does not establish maximum capacity or JIT throughput speedups.')
     else:
         lines.append('> Closed-loop throughput ratios are pilot observations, not sustained capacity estimates.')
     lines.append('> The median of per-run p99s reflects run-to-run consistency and is not a pooling of all requests into a single distribution.')
     lines.append('> Spinel comparison reflects the total architectural execution stack difference (AOT binary, server, adapter).\n')
+    if crud_workload:
+        lines.append('> CRUD rate and latency refer to complete logical operations (including form fetch and write requests); HTTP request metrics remain in raw JSON.\n')
+    rate_heading = 'Operations/s' if crud_workload else 'RPS'
+    latency_prefix = 'Op ' if crud_workload else ''
 
     # Target summaries table
     lines.append('## 1. Target Endpoint Performance Summary\n')
-    lines.append('| Target | Endpoint | Status | Valid Reps | Median RPS | Median p50 (ms) | Median p95 (ms) | Median p99 (ms) | Median Err % | Peak container memory (MB) | Mean CPU % |')
+    lines.append(f'| Target | Endpoint | Status | Valid Reps | Median {rate_heading} | Median {latency_prefix}p50 (ms) | Median {latency_prefix}p95 (ms) | Median {latency_prefix}p99 (ms) | Median Err % | Peak container memory (MB) | Mean CPU % |')
     lines.append('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
 
     for item in report_data['target_aggregates']:
@@ -310,7 +337,7 @@ def generate_markdown_report(report_data):
     if report_data.get('trials'):
         checks = report_data.get('checks', {})
         lines.append('## 3. Individual Trial Dispositions and Execution Details\n')
-        lines.append('| Target | Endpoint | Rep | Status | Reason / Details | RPS | p50 (ms) | p95 (ms) | p99 (ms) | Err % | Peak container memory (MB) | CPU % |')
+        lines.append(f'| Target | Endpoint | Rep | Status | Reason / Details | {rate_heading} | {latency_prefix}p50 (ms) | {latency_prefix}p95 (ms) | {latency_prefix}p99 (ms) | Err % | Peak container memory (MB) | CPU % |')
         lines.append('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
         for t in report_data['trials']:
             tgt = t.get('target', '-')
@@ -338,8 +365,9 @@ def generate_markdown_report(report_data):
 
             badge = ('✅ passed' if eff_st == 'passed' else '✅ verified' if eff_st == 'verified'
                      else '⚠️ unstable' if eff_st == 'unstable' else f'❌ {eff_st}')
-            lat = m.get('latency_ms', {})
-            rps_val = m.get('rps_successful') or m.get('rps')
+            operation = operation_metrics(m) if crud_workload else None
+            lat = operation[1] if operation else m.get('latency_ms', {})
+            rps_val = operation[0] if operation else (None if crud_workload else m.get('rps_successful') or m.get('rps'))
             rps = f"{rps_val:.2f}" if rps_val is not None else '-'
             p50_val = lat.get('p50') or lat.get('med') or m.get('p50_ms')
             p50 = f"{p50_val:.2f}" if p50_val is not None else '-'
@@ -347,16 +375,19 @@ def generate_markdown_report(report_data):
             p95 = f"{p95_val:.2f}" if p95_val is not None else '-'
             p99_val = lat.get('p99') or m.get('p99_ms')
             p99 = f"{p99_val:.2f}" if p99_val is not None else '-'
-            tot = m.get('requests_total') or ((m.get('successful', 0) + m.get('errors', 0)) or 1)
-            err_cnt = m.get('requests_failed') if 'requests_failed' in m else m.get('errors', 0)
-            err_str = f"{(err_cnt / tot) * 100:.2f}%" if tot > 0 and ('errors' in m or 'requests_failed' in m) else '-'
+            tot = operation[2].get('total', 0) if operation else (
+                m.get('requests_total') or ((m.get('successful', 0) + m.get('errors', 0)) or 1))
+            err_cnt = operation[2].get('failed', 0) if operation else (
+                m.get('requests_failed') if 'requests_failed' in m else m.get('errors', 0))
+            err_str = f"{(err_cnt / tot) * 100:.2f}%" if tot > 0 and (operation or
+                not crud_workload and ('errors' in m or 'requests_failed' in m)) else '-'
             telemetry = t.get('telemetry', {}).get('summary', {})
             memory_bytes = telemetry.get('peak_container_memory_bytes')
             if memory_bytes is None:
                 memory_bytes = telemetry.get('peak_rss_bytes')
             rss = f"{memory_bytes / (1024 * 1024):.2f}" if memory_bytes is not None else '-'
             cpu = f"{telemetry['mean_cpu_pct']:.2f}%" if telemetry.get('mean_cpu_pct') else '-'
-            if eff_st == 'verified':
+            if eff_st == 'verified' or crud_workload and operation is None:
                 # Keep raw smoke metrics in JSON, but do not invite latency or
                 # throughput comparisons from short, unconverged CI trials.
                 rps = p50 = p95 = p99 = rss = cpu = '-'
@@ -369,9 +400,10 @@ def generate_csv_report(report_data):
     """Format target summaries into CSV string."""
     output = io.StringIO()
     writer = csv.writer(output)
+    rate_name = 'operations_per_second' if report_data.get('metric_basis') == 'operation' else 'rps'
     writer.writerow([
-        'target', 'endpoint', 'is_eligible', 'valid_repetition_count',
-        'rps_median', 'rps_min', 'rps_max', 'rps_iqr',
+        'target', 'endpoint', 'metric_basis', 'is_eligible', 'valid_repetition_count',
+        f'{rate_name}_median', f'{rate_name}_min', f'{rate_name}_max', f'{rate_name}_iqr',
         'p50_ms_median', 'p95_ms_median', 'p99_ms_median',
         'error_rate_median', 'peak_container_memory_mb_median', 'mean_cpu_pct_median', 'slo_met'
     ])
@@ -379,6 +411,7 @@ def generate_csv_report(report_data):
         writer.writerow([
             item['target'],
             item['endpoint'],
+            item.get('metric_basis', 'http_request'),
             item['is_eligible'],
             item['valid_repetition_count'],
             item['rps']['median'],
@@ -402,6 +435,7 @@ def build_report(output_dir, slo_p99_ms=DEFAULT_SLO_P99_MS, slo_error_rate=DEFAU
     plan_path = root / 'plan.json'
     profile = json.loads(plan_path.read_text(encoding='utf-8')).get('profile', {}) if plan_path.exists() else {}
     fixed_offered_rate = profile.get('driver') == 'k6'
+    crud_workload = profile.get('k6_script') == 'bench/k6/crud.js'
 
     # Determine targets and endpoints
     targets = sorted({t['target'] for t in trials} | set(checks.keys()))
@@ -413,7 +447,8 @@ def build_report(output_dir, slo_p99_ms=DEFAULT_SLO_P99_MS, slo_error_rate=DEFAU
     target_aggregates = []
     for target in targets:
         for endpoint in endpoints:
-            agg = aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_error_rate)
+            agg = aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_error_rate,
+                                            crud_workload=crud_workload)
             target_aggregates.append(agg)
 
     pairwise_comparisons = []
@@ -424,6 +459,7 @@ def build_report(output_dir, slo_p99_ms=DEFAULT_SLO_P99_MS, slo_error_rate=DEFAU
     report_data = {
         'schema_version': 1,
         'fixed_offered_rate': fixed_offered_rate,
+        'metric_basis': 'operation' if crud_workload else 'http_request',
         'profile': profile,
         'slo_criteria': {'p99_ms': slo_p99_ms, 'error_rate': slo_error_rate},
         'target_aggregates': target_aggregates,

@@ -156,5 +156,40 @@ class ReportUnitTests(unittest.TestCase):
             self.assertEqual(data['pairwise_comparisons'], [])
             self.assertIn('does not establish maximum capacity', (root / 'summary.md').read_text(encoding='utf-8'))
 
+    def test_crud_reports_complete_operations_instead_of_individual_http_requests(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / 'preflight').mkdir()
+            (root / 'trials').mkdir()
+            (root / 'plan.json').write_text(json.dumps({'profile': {
+                'driver': 'k6', 'k6_script': 'bench/k6/crud.js', 'crud_scenario': 'create_delete'}}))
+            (root / 'preflight/preflight.json').write_text(json.dumps({
+                'rails-cruby-off': {'eligible_endpoints': ['/articles']}}))
+            measurement = {'driver': 'k6-crud', 'rps_successful': 90,
+                           'latency_ms': {'p50': 2, 'p95': 4, 'p99': 8},
+                           'requests_total': 270, 'requests_failed': 0,
+                           'operations': {'total': 90, 'failed': 0, 'ops_successful_rate': 30},
+                           'operation_latency_ms': {'p50': 12, 'p95': 20, 'p99': 32}}
+            (root / 'trials/per-run.json').write_text(json.dumps([{
+                'target': 'rails-cruby-off', 'endpoint': '/articles', 'repetition': 1,
+                'status': 'passed', 'measurement': measurement}]))
+            data = report.build_report(root)
+            row = data['target_aggregates'][0]
+            self.assertEqual(data['metric_basis'], 'operation')
+            self.assertEqual(row['rps']['median'], 30)
+            self.assertEqual(row['p99_ms']['median'], 32)
+            markdown = (root / 'summary.md').read_text()
+            self.assertIn('Median Operations/s', markdown)
+            self.assertIn('Median Op p99 (ms)', markdown)
+            self.assertIn('| 30 | 12 | 20 | 32 |', markdown)
+            self.assertIn('operations_per_second_median', (root / 'summary.csv').read_text())
+
+            measurement.pop('operation_latency_ms')
+            (root / 'trials/per-run.json').write_text(json.dumps([{
+                'target': 'rails-cruby-off', 'endpoint': '/articles', 'repetition': 1,
+                'status': 'passed', 'measurement': measurement}]))
+            data = report.build_report(root)
+            self.assertEqual(data['target_aggregates'][0]['valid_repetition_count'], 0)
+
 if __name__ == '__main__':
     unittest.main()
