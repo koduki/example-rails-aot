@@ -368,6 +368,49 @@ def preflight(names, output, p, cpus):
         save(output/'preflight.json',comparisons)
     return comparisons
 
+def preflight_identity(names):
+    """Bind reused checks to the source and container images actually tested."""
+    names = sorted(set(names) | {TARGETS['reference']})
+    stages = sorted({TARGETS['targets'][name]['image'] for name in names})
+    return {
+        'commit': command(['git', 'rev-parse', 'HEAD']),
+        'targets_sha256': hashlib.sha256((ROOT/'bench/targets.yml').read_bytes()).hexdigest(),
+        'preflight_sha256': hashlib.sha256((ROOT/'scripts/bench/preflight.py').read_bytes()).hexdigest(),
+        'runner_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        'image_ids': {stage: json.loads(command(['docker', 'image', 'inspect', 'rails-aot-bench:'+stage]))[0]['Id']
+                      for stage in stages},
+    }
+
+def save_preflight_manifest(path, names):
+    path = Path(path)
+    save(path.with_name('preflight-manifest.json'), {
+        'schema_version': 1,
+        'preflight_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+        'targets': sorted(set(names) | {TARGETS['reference']}),
+        'identity': preflight_identity(names),
+    })
+
+def reuse_preflight(path, names):
+    path = Path(path)
+    if not path.is_file():
+        raise ValueError(f'Preflight file does not exist: {path}')
+    manifest_path = path.with_name('preflight-manifest.json')
+    if not manifest_path.is_file():
+        raise ValueError(f'Preflight manifest is missing: {manifest_path}; rerun preflight')
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    requested = set(names) | {TARGETS['reference']}
+    if manifest.get('schema_version') != 1 or not requested.issubset(set(manifest.get('targets', []))):
+        raise ValueError('Preflight target coverage is stale; rerun preflight')
+    if manifest.get('preflight_sha256') != hashlib.sha256(path.read_bytes()).hexdigest():
+        raise ValueError('Preflight results changed since validation; rerun preflight')
+    actual = preflight_identity(manifest['targets'])
+    if manifest.get('identity') != actual:
+        raise ValueError('Preflight source or container images changed; rerun preflight')
+    checks = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(checks, dict) or not requested.issubset(checks):
+        raise ValueError('Preflight results do not cover requested targets; rerun preflight')
+    return checks
+
 def sample(server, endpoint, duration, p, cpus, directory=None):
     if p.get('driver') == 'k6':
         output_dir = Path(directory) if directory else ROOT / 'bench-results/tmp'
@@ -615,11 +658,17 @@ def main():
         if args.action == 'build':
             build(list(dict.fromkeys([TARGETS['reference']]+p['targets'])),output)
         else:
-            if getattr(args, 'preflight_file', None) and Path(args.preflight_file).exists():
-                checks = json.loads(Path(args.preflight_file).read_text(encoding='utf-8'))
-                save(output / 'preflight/preflight.json', checks)
+            if getattr(args, 'preflight_file', None):
+                checks = reuse_preflight(args.preflight_file, p['targets'])
+                reused = Path(args.preflight_file)
+                (output / 'preflight').mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(reused, output / 'preflight/preflight.json')
+                shutil.copyfile(reused.with_name('preflight-manifest.json'),
+                                output / 'preflight/preflight-manifest.json')
             else:
-                checks = preflight(p['targets'],output/'preflight',p,cpus)
+                checks_dir = output if args.action == 'preflight' else output/'preflight'
+                checks = preflight(p['targets'],checks_dir,p,cpus)
+                save_preflight_manifest(checks_dir/'preflight.json', p['targets'])
             if args.action == 'run' and p.get('k6_script') == 'bench/k6/crud.js':
                 missing = crud_gate(checks, p['targets'], p.get('crud_scenario', 'mix'))
                 if missing:

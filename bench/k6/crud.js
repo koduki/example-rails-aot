@@ -115,6 +115,7 @@ export default function () {
 
       const createdId = extractIdFromLocation(createRes.headers.Location || createRes.headers.location);
       let deleteOk = false;
+      let deleteStatus = null;
 
       if (createdId) {
         const deletePayload = {
@@ -126,6 +127,7 @@ export default function () {
           timeout: timeout,
           redirects: 0,
         });
+        deleteStatus = delRes.status;
         deleteOk = delRes.status === 302 || delRes.status === 303;
       }
 
@@ -140,6 +142,11 @@ export default function () {
       if (ok) {
         successfulOperations.add(1);
       } else {
+        // Keep the cause in the retained k6.log without logging bodies or CSRF tokens.
+        console.error(JSON.stringify({ event: 'crud_create_delete_failed', iteration,
+          form_status: newPageRes.status, token_present: Boolean(token),
+          create_status: createRes.status, created_id_present: Boolean(createdId),
+          delete_status: deleteStatus }));
         checkFailures.add(1);
       }
     } else {

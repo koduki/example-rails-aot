@@ -112,6 +112,8 @@ python3 scripts/bench/run.py build --output bench-results/build
 python3 scripts/bench/run.py preflight --output bench-results/preflight
 
 # 3. 本測定の実行 (環境設定ファイルを指定)
+# preflight.json と隣接する preflight-manifest.json をセットで保持すること。
+# ソース・対象イメージ・検証結果が変わった場合、preflight の再実行が必要。
 python3 scripts/bench/run.py run \
   --env-file bench/environments/local-single-host.env \
   --preflight-file bench-results/preflight/preflight.json \
@@ -188,8 +190,10 @@ scenario: `update` for `mix`/`update`, `create` plus `delete` for
 `create_delete`. A missing or failed required case blocks the run. The `read`
 scenario also requires the selected GET endpoint to pass preflight.
 
-Run the preflight against freshly built images before using the CRUD profile;
-do not reuse a preflight result from a different source, image, or CSRF policy:
+Run the preflight against freshly built images before using the CRUD profile.
+Keep `preflight.json` and its adjacent `preflight-manifest.json` together.
+Reuse checks the source revision, runner and preflight code, target matrix,
+image IDs, and result digest; changes require another preflight:
 
 ```sh
 python3 scripts/bench/run.py build --profile bench/profiles/crud.yml --output bench-results/build
