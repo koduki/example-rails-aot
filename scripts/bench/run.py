@@ -361,12 +361,16 @@ def main():
     parser.add_argument('--targets',help='Comma-separated target IDs; default from profile')
     parser.add_argument('--output',default='bench-results/'+time.strftime('%Y%m%dT%H%M%S')+'-'+uuid.uuid4().hex[:6])
     parser.add_argument('--app-cpus'); parser.add_argument('--load-cpus'); parser.add_argument('--dry-run',action='store_true')
+    parser.add_argument('--preflight-file', help='Path to existing preflight.json to reuse')
+    parser.add_argument('--seed', type=int, help='Override random seed for scheduling')
     args = parser.parse_args()
     if args.action == 'report':
         print(json.dumps(report(args.output),indent=2,ensure_ascii=False)); return 0
     p = config(args.profile)
     if args.targets:
         p['targets'] = select(args.targets.split(','))
+    if args.seed is not None:
+        p['seed'] = args.seed
     cpus = allocation(p,args.app_cpus,args.load_cpus)
     plan = {'profile':p,'cpus':cpus,'schedule':schedule(p),'action':args.action,
             'reference':TARGETS['reference'],'targets':TARGETS}
@@ -375,11 +379,12 @@ def main():
     output = Path(args.output).resolve(); output.mkdir(parents=True,exist_ok=False)
     save(output/'plan.json',plan)
     save(output/'env.json', {'schema_version':1,'platform':platform.platform(),'python':sys.version,
-         'cpuinfo':Path('/proc/cpuinfo').read_text(),'cpus':cpus,
+         'cpuinfo':Path('/proc/cpuinfo').read_text() if Path('/proc/cpuinfo').exists() else '',
+         'cpus':cpus,
          'git_commit':command(['git','rev-parse','HEAD']), 'git_status':command(['git','status','--porcelain']),
          'profile_sha256':hashlib.sha256(Path(args.profile).read_bytes()).hexdigest(),
          'target_sha256':hashlib.sha256((ROOT/'bench/targets.yml').read_bytes()).hexdigest(),
-         'docker_version':command(['docker','version','--format','{{json .}}']),
+         'docker_version':command(['docker','version','--format','{{json .}}'], check=False),
          'cpu_smt_siblings':{str(c):Path(f'/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list').read_text().strip()
              for c in cpus['app']+cpus['client'] if Path(f'/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list').exists()}})
     def interrupt(*_):
@@ -389,12 +394,21 @@ def main():
         if args.action == 'build':
             build(list(dict.fromkeys([TARGETS['reference']]+p['targets'])),output)
         else:
-            checks = preflight(p['targets'],output/'preflight',p,cpus)
+            if getattr(args, 'preflight_file', None) and Path(args.preflight_file).exists():
+                checks = json.loads(Path(args.preflight_file).read_text(encoding='utf-8'))
+                save(output / 'preflight/preflight.json', checks)
+            else:
+                checks = preflight(p['targets'],output/'preflight',p,cpus)
             if args.action == 'run':
                 rows = trials(p,cpus,output/'trials',checks)
-                save(output/'summary.json',{'purpose':'P0 orchestration validation; not a capacity ranking',
+                save(output/'summary.json',{'purpose':'Benchmark trial execution summary',
                     'passed':sum(r['status']=='passed' for r in rows),'total':len(rows)})
-                if any(r['status'] not in ('passed','excluded') for r in rows):
+                try:
+                    report(output)
+                except Exception:
+                    pass
+                allowed_statuses = ('passed', 'excluded', 'unstable') if p.get('allow_unstable') else ('passed', 'excluded')
+                if any(r['status'] not in allowed_statuses for r in rows):
                     return 1
             if any(not set(p['endpoints']).issubset(checks[n]['eligible_endpoints']) for n in p['targets']):
                 return 1

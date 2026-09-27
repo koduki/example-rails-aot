@@ -1,6 +1,6 @@
 # Rails / Roundhouse / Spinel ベンチマーク：残作業と実施順
 
-更新日：2026-09-27。対象は親 Issue [#11](https://github.com/koduki/example-rails-aot/issues/11) のうち、P0 の後に残る [#16〜#21](https://github.com/koduki/example-rails-aot/issues/16)。P0 実装（#12〜#15）は [PR #22](https://github.com/koduki/example-rails-aot/pull/22) で main にマージ完了。現在は P1 の #16（負荷・資源計測・対比較レポート）を実装中。
+更新日：2026-09-27。対象は親 Issue [#11](https://github.com/koduki/example-rails-aot/issues/11) のうち、P0 の後に残る [#16〜#21](https://github.com/koduki/example-rails-aot/issues/16)。P0 実装（#12〜#15）は [PR #22](https://github.com/koduki/example-rails-aot/pull/22)、#16 は [PR #23](https://github.com/koduki/example-rails-aot/pull/23) で main にマージ完了。現在は P1 の #17（Actions の簡易測定・成果物保存）を実装中。
 
 ## 現在地と結果に付ける条件
 

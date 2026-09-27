@@ -1,0 +1,115 @@
+name: Benchmark Pipeline
+on:
+  pull_request:
+    paths:
+      - 'bench/**'
+      - 'scripts/bench/**'
+      - 'tests/bench/**'
+      - 'Dockerfile.bench'
+      - '.dockerignore'
+      - 'scripts/transpile.sh'
+      - 'scripts/prepare-assets.sh'
+      - '.github/workflows/benchmark.yml'
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Benchmark profile (smoke, quick, full)'
+        required: true
+        default: 'quick'
+        type: choice
+        options:
+          - quick
+          - smoke
+          - full
+      targets:
+        description: 'Comma-separated target list (blank for all profile targets)'
+        required: false
+        default: ''
+        type: string
+      seed:
+        description: 'Random seed for trial scheduling'
+        required: false
+        default: '20260924'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Benchmark execution and verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unit and CLI contract tests
+        run: |
+          python3 -m unittest discover -s tests/bench -v
+          python3 scripts/bench/run.py run --profile bench/profiles/smoke.yml --dry-run > benchmark-plan-smoke.json
+          python3 scripts/bench/run.py run --profile bench/profiles/quick.yml --dry-run > benchmark-plan-quick.json
+
+      - name: Configure benchmark parameters
+        id: config
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PROFILE_NAME="${{ inputs.profile }}"
+            PROFILE_PATH="bench/profiles/${{ inputs.profile }}.yml"
+            TARGETS_VAL="${{ inputs.targets }}"
+            SEED_VAL="${{ inputs.seed }}"
+          else
+            PROFILE_NAME="smoke"
+            PROFILE_PATH="bench/profiles/smoke.yml"
+            TARGETS_VAL=""
+            SEED_VAL="20260924"
+          fi
+          echo "profile_name=$PROFILE_NAME" >> "$GITHUB_OUTPUT"
+          echo "profile_path=$PROFILE_PATH" >> "$GITHUB_OUTPUT"
+          echo "targets=$TARGETS_VAL" >> "$GITHUB_OUTPUT"
+          echo "seed=$SEED_VAL" >> "$GITHUB_OUTPUT"
+
+      - name: Build all runtime images
+        run: |
+          python3 scripts/bench/run.py build \
+            --targets rails-cruby-off,rails-cruby-yjit,emit-cruby-off,emit-cruby-yjit,rails-jruby,emit-jruby,spinel,rails-jruby-off,emit-jruby-off \
+            --output bench-results/build
+
+      - name: Compare serving runtime, responses and database operations
+        run: |
+          python3 scripts/bench/run.py preflight \
+            --targets rails-cruby-off,rails-cruby-yjit,emit-cruby-off,emit-cruby-yjit,rails-jruby,emit-jruby,spinel,rails-jruby-off,emit-jruby-off \
+            --output bench-results/preflight
+
+      - name: Execute sequential benchmark trials (same measurement job)
+        run: |
+          ARGS="--profile ${{ steps.config.outputs.profile_path }}"
+          if [ -n "${{ steps.config.outputs.targets }}" ]; then
+            ARGS="$ARGS --targets ${{ steps.config.outputs.targets }}"
+          fi
+          if [ -n "${{ steps.config.outputs.seed }}" ]; then
+            ARGS="$ARGS --seed ${{ steps.config.outputs.seed }}"
+          fi
+          python3 scripts/bench/run.py run $ARGS \
+            --preflight-file bench-results/preflight/preflight.json \
+            --output bench-results/measurement
+
+      - name: Publish Step Summary report
+        if: always()
+        run: |
+          if [ -f bench-results/measurement/summary.md ]; then
+            cat bench-results/measurement/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-${{ steps.config.outputs.profile_name }}-${{ github.sha }}
+          path: |
+            bench-results/
+            benchmark-plan-*.json
+          retention-days: 14
