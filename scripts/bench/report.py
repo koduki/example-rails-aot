@@ -83,7 +83,8 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
             continue
 
         if status != 'passed':
-            excluded_repetitions.append({'repetition': t.get('repetition'), 'reason': reason or status})
+            excluded_repetitions.append({'repetition': t.get('repetition'),
+                'reason': reason or ('Functional smoke only; no convergence claim' if status == 'verified' else status)})
             continue
 
         # Check client saturation

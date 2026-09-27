@@ -38,13 +38,15 @@ def prepare(destination):
                            ('database.yml', 'config/database.yml'), ('puma.rb', 'config/puma.rb')]:
         shutil.copyfile(ROOT / 'bench/runtime' / source, destination / target)
     (destination / 'config/cable.yml').write_text('production:\n  adapter: async\n')
-    # Authentication, CSRF, views, callbacks, and controller behavior stay intact.
+    # The benchmark-only production configuration disables Rails' CSRF verifier
+    # to match the current emitted runtimes. The source app is not modified.
     manifest = {'schema_version': 1, 'rails': '8.0.5.1', 'source_hash': tree_hash(ROOT / 'blog'),
                 'derived_hash': tree_hash(destination), 'changes': [
                     'Rails 8.0 framework compatibility; platform-specific database gems',
                     'production settings: no response cache, inline jobs, async cable, warn logging',
                     'Bootsnap disabled in both Ruby runtimes; JIT explicit',
-                    'database location supplied externally; identical SQLite pragmas']}
+                    'database location supplied externally; identical SQLite pragmas',
+                    'benchmark-only production CSRF verification disabled for all targets']}
     (destination / 'benchmark-source.json').write_text(json.dumps(manifest, indent=2) + '\n')
     return manifest
 

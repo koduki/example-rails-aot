@@ -5,7 +5,7 @@ description: Design reproducible multi-runtime load experiments, check workload 
 
 # Rigorous benchmarking
 
-Use for comparing Rails, JRuby, and Spinel runtime configurations. Read [benchmark results](../../../docs/benchmark-results.md) and [benchmark scripts](../../../scripts/bench/) first. Run preflight for the selected route before timing; write profiles remain blocked until their semantic differences are fixed.
+Use for comparing Rails, JRuby, and Spinel runtime configurations. Read [benchmark results](../../../docs/benchmark-results.md) and [benchmark scripts](../../../scripts/bench/) first. Run preflight for the selected route before timing. The benchmark-only CRUD profile admits only the successful operations it executes; invalid input and CSRF rejection remain separate correctness failures.
 
 1. Record CPU topology, app and load-generator placement, CPU quotas, runtime/JIT identity, fixture size, and target commit. Leave enough CPU budget for the client.
 2. Choose the question and workload. Fixed offered RPS measures latency, errors, and resource use **at that rate**. To compare maximum sustained throughput and derive JIT interaction ratios, add a separate capacity search with valid repeated trials and the same endpoint and placement.

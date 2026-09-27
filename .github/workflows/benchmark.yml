@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: 'Hosted-runner profile (smoke, quick, diagnostic); run full on a dedicated host'
+        description: 'Hosted-runner profile (smoke, quick, diagnostic, crud, crud-create-delete); run full on a dedicated host'
         required: true
         default: 'quick'
         type: choice
@@ -20,6 +20,8 @@ on:
           - quick
           - smoke
           - diagnostic
+          - crud
+          - crud-create-delete
       targets:
         description: 'Comma-separated target list (blank for all profile targets)'
         required: false
@@ -53,6 +55,8 @@ jobs:
           python3 scripts/bench/run.py run --profile bench/profiles/quick.yml --dry-run > benchmark-plan-quick.json
           python3 scripts/bench/run.py run --profile bench/profiles/diagnostic.yml --dry-run > benchmark-plan-diagnostic.json
           python3 scripts/bench/run.py run --profile bench/profiles/full.yml --dry-run > benchmark-plan-full.json
+          python3 scripts/bench/run.py run --profile bench/profiles/crud.yml --dry-run > benchmark-plan-crud.json
+          python3 scripts/bench/run.py run --profile bench/profiles/crud-create-delete.yml --dry-run > benchmark-plan-crud-create-delete.json
 
       - name: Configure benchmark parameters
         id: config
@@ -98,6 +102,22 @@ jobs:
             --preflight-file bench-results/preflight/preflight.json \
             --output bench-results/measurement
 
+      - name: Verify valid read/update CRUD workload on PR
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 scripts/bench/run.py run \
+            --profile bench/profiles/crud.yml \
+            --preflight-file bench-results/preflight/preflight.json \
+            --output bench-results/crud
+
+      - name: Verify valid create/delete workload on PR
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 scripts/bench/run.py run \
+            --profile bench/profiles/crud-create-delete.yml \
+            --preflight-file bench-results/preflight/preflight.json \
+            --output bench-results/crud-create-delete
+
       - name: Publish Step Summary report
         if: always()
         run: |
@@ -107,6 +127,19 @@ jobs:
           if [ -f bench-results/measurement/diagnostics.md ]; then
             cat bench-results/measurement/diagnostics.md >> "$GITHUB_STEP_SUMMARY"
           fi
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          for scenario in ('crud', 'crud-create-delete'):
+              path = Path('bench-results') / scenario / 'report.json'
+              if path.exists():
+                  data = json.loads(path.read_text())
+                  print(f'\n### {scenario}: functional smoke only')
+                  print(f"Trial statuses: {data.get('trial_status_counts', {})}")
+                  print(f"Database and HTTP verified: {data.get('verified_smoke_trials', 0)}")
+                  if data.get('invalid_trials'):
+                      print(f"Failed or incomplete: {data['invalid_trials']}")
+          PY
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v4

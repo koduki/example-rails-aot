@@ -9,6 +9,7 @@ import platform
 import random
 import shutil
 import signal
+import sqlite3
 import statistics
 import subprocess
 import sys
@@ -17,10 +18,31 @@ import uuid
 from pathlib import Path
 
 from prepare import prepare
-from preflight import HttpClient, READS, capture, check_probe, compare
+from preflight import HttpClient, READS, capture, check_probe, compare, snapshot
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGETS = json.loads((ROOT / 'bench/targets.yml').read_text())
+CRUD_CASES = {
+    'mix': frozenset(('update',)),
+    'update': frozenset(('update',)),
+    'create_delete': frozenset(('create', 'delete')),
+    'read': frozenset(),
+}
+
+def crud_gate(checks, targets, scenario):
+    """Admit only the successful operations the selected workload executes.
+
+    Error rendering and invalid CSRF are still captured by preflight, but are
+    not operations in this benchmark-only workload. A missing case fails shut.
+    """
+    required = CRUD_CASES[scenario]
+    missing = {}
+    for target in targets:
+        failed = sorted(case for case in required
+                        if checks.get(target, {}).get('cases', {}).get(case, {}).get('status') != 'passed')
+        if failed:
+            missing[target] = failed
+    return missing
 
 def save(path, data):
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
@@ -58,6 +80,11 @@ def config(path):
         raise ValueError('fixture_articles must be an integer >= 3 for the preflight paths')
     if p.get('driver') == 'k6' and (type(p.get('offered_rps')) not in (int, float) or p['offered_rps'] <= 0):
         raise ValueError('k6 offered_rps must be positive')
+    if p.get('k6_script') == 'bench/k6/crud.js' and p.get('crud_scenario', 'mix') not in CRUD_CASES:
+        raise ValueError('Unknown CRUD scenario')
+    if 'verification_only' in p and (type(p['verification_only']) is not bool or
+            p['verification_only'] and p.get('k6_script') != 'bench/k6/crud.js'):
+        raise ValueError('verification_only requires a CRUD k6 profile and a boolean setting')
     minimum = len(p['targets']) * len(p['endpoints']) * p['repetitions'] * (
         p['warmup_min_seconds'] + p['measurement_seconds'])
     if p['total_timeout'] < minimum:
@@ -115,6 +142,61 @@ def stable(windows, p):
         if statistics.pstdev(values)/avg > p['max_cv'] or drift > p['max_drift']:
             return False
     return True
+
+def article_sequence(path):
+    """AUTOINCREMENT advances for each successful create, even after deletion."""
+    db = sqlite3.connect(f'file:{Path(path).resolve()}?mode=ro', uri=True)
+    try:
+        row = db.execute("SELECT seq FROM sqlite_sequence WHERE name='articles'").fetchone()
+        return row[0] if row else 0
+    finally:
+        db.close()
+
+def verify_crud_state(before, after, sequence_before, sequence_after, measured, scenario, article_count):
+    """Check the timed workload really performed its expected database operations."""
+    operations = measured.get('operations', {})
+    iterations = measured.get('iterations_completed', 0)
+    if iterations != operations.get('total') or iterations != operations.get('successful'):
+        raise ValueError('CRUD iteration and successful operation counts differ')
+    if before['comments'] != after['comments']:
+        raise ValueError('CRUD workload unexpectedly changed comments')
+    if scenario == 'create_delete':
+        if before['articles'] != after['articles']:
+            raise ValueError('Create/delete left a changed or undeleted article')
+        if sequence_after - sequence_before != iterations:
+            raise ValueError('Create/delete count does not match persisted database sequence')
+        return {'status': 'passed', 'created_and_deleted': iterations}
+    if sequence_after != sequence_before:
+        raise ValueError('Read/update workload unexpectedly created an article')
+    expected = {}
+    for iteration in range(iterations):
+        if scenario == 'update' or scenario == 'mix' and iteration % 10 == 0:
+            article_id = 1 + (iteration * 31) % article_count
+            expected[article_id] = iteration
+    if len(before['articles']) != len(after['articles']) or operations.get('writes') != sum(
+            scenario == 'update' or scenario == 'mix' and i % 10 == 0 for i in range(iterations)):
+        raise ValueError('Read/update operation count or article count differs')
+    prior = {row['id']: row for row in before['articles']}
+    current = {row['id']: row for row in after['articles']}
+    if prior.keys() != current.keys():
+        raise ValueError('Read/update changed article identities')
+    for article_id, old in prior.items():
+        new = current[article_id]
+        if article_id in expected:
+            iteration = expected[article_id]
+            title = f'Article {article_id} (iteration {iteration})'
+            body = f'Updated body for article {article_id} at iteration {iteration}. Preserves bounded storage.'
+            if (new['title'], new['body']) != (title, body) or any(
+                    new[key] != old[key] for key in ('id', 'created_at')):
+                raise ValueError(f'Update was not persisted for article {article_id}')
+        elif new != old:
+            raise ValueError(f'Unexpected mutation of article {article_id}')
+    return {'status': 'passed', 'updated_articles': len(expected)}
+
+def warmup_valid(windows):
+    return all(w.get('requests_failed', w.get('errors', 0)) == 0 and
+               w.get('iterations_dropped', 0) == 0 and not w.get('client_saturated', False) and
+               w.get('operations', {}).get('failed', 0) == 0 for w in windows)
 
 def tag(target):
     return 'rails-aot-bench:' + TARGETS['targets'][target]['image']
@@ -221,6 +303,7 @@ def report(output):
     eligible = sorted(set.intersection(*(set(v.get('eligible_endpoints',[])) for v in checks.values()))) if checks else []
     data = {'purpose':'P0 validity and execution status; not a capacity ranking',
             'eligible_common_reads':eligible,
+            'crud_gate_policy':'successful operations only; invalid responses remain failed and CSRF rejection is excluded under the benchmark policy',
             'preflight':{name:{'eligible_endpoints':value.get('eligible_endpoints',[]),
                 'cases':{case:entry['status'] for case,entry in value.get('cases',{}).items()},
                 'status':value.get('status','checked')} for name,value in checks.items()}}
@@ -229,9 +312,10 @@ def report(output):
         rows = json.loads(trials_file.read_text(encoding='utf-8'))
         data['trial_status_counts'] = {s:sum(row['status']==s for row in rows)
                                         for s in sorted({row['status'] for row in rows})}
+        data['verified_smoke_trials'] = sum(row['status'] == 'verified' for row in rows)
         data['invalid_trials'] = [dict(target=row['target'],endpoint=row['endpoint'],
             repetition=row['repetition'],status=row['status'],reason=row.get('reason'))
-            for row in rows if row['status'] != 'passed']
+            for row in rows if row['status'] not in ('passed', 'verified')]
     save(root/'report.json',data)
 
     import report as p1_report
@@ -312,10 +396,12 @@ def sample(server, endpoint, duration, p, cpus, directory=None):
         if has_local_k6:
             k6_args = ['taskset', '-c', client_cpus, 'k6', 'run', str(script_path),
                        *env_args, '-e', f'SUMMARY_PATH={summary_path}']
-            command(k6_args, timeout=duration + p['request_timeout'] + 30)
+            command(k6_args, timeout=duration + p['request_timeout'] + 30,
+                    log=output_dir / 'k6.log')
         else:
             k6_args = [
                 'docker', 'run', '--rm',
+                '--user', f'{os.getuid()}:{os.getgid()}',
                 '--cpuset-cpus', client_cpus,
                 '--network', 'host',
                 '-v', f'{script_path.resolve()}:/test_script.js:ro',
@@ -324,10 +410,13 @@ def sample(server, endpoint, duration, p, cpus, directory=None):
                 '-e', 'SUMMARY_PATH=/output/k6-summary.json',
                 'grafana/k6:latest', 'run', '/test_script.js'
             ]
-            command(k6_args, timeout=duration + p['request_timeout'] + 60)
+            command(k6_args, timeout=duration + p['request_timeout'] + 60,
+                    log=output_dir / 'k6.log')
 
         if not summary_path.exists():
-            raise RuntimeError(f'k6 produced no normalized summary: {summary_path}')
+            log_path = output_dir / 'k6.log'
+            detail = log_path.read_text(encoding='utf-8')[-1200:] if log_path.exists() else 'no k6 log'
+            raise RuntimeError(f'k6 produced no normalized summary: {summary_path}\n{detail}')
         measured = json.loads(summary_path.read_text(encoding='utf-8'))
         required = ('elapsed', 'rps', 'p95_ms', 'requests_total', 'requests_successful',
                     'requests_failed', 'iterations_dropped', 'client_saturated')
@@ -359,19 +448,28 @@ def trials(p, cpus, output, checks):
                 with Server(trial['target'], directory, p, cpus) as server:
                     diag_start = server.get_diagnostics() if p.get('diagnostics') else None
                     windows = []; elapsed = 0.0; ready = False
+                    verification_only = p.get('verification_only', False)
                     while elapsed < p['warmup_max_seconds'] and time.monotonic() < deadline:
                         window = sample(server, trial['endpoint'], p['window_seconds'], p, cpus, directory)
                         windows.append(window); elapsed += window['elapsed']
                         save(directory / 'warmup.json', windows)
-                        if elapsed >= p['warmup_min_seconds'] and stable(windows, p):
+                        if verification_only and elapsed >= p['warmup_min_seconds']:
+                            break
+                        if not verification_only and elapsed >= p['warmup_min_seconds'] and stable(windows, p):
                             ready = True; break
                     row['warmup_seconds'] = elapsed
+                    row['warmup_converged'] = None if verification_only else ready
                     diag_warmup = server.get_diagnostics() if p.get('diagnostics') else None
-                    if not ready and not p.get('allow_unstable'):
+                    if verification_only and not warmup_valid(windows):
+                        row.update(status='failed', reason='Warmup had failed requests, operations, or dropped iterations')
+                    elif not ready and not verification_only and not p.get('allow_unstable'):
                         row.update(status='unstable', reason='No stable window within budget')
                     elif deadline - time.monotonic() < p['measurement_seconds']:
                         row.update(status='not_run', reason='Insufficient remaining measurement budget')
                     else:
+                        is_crud = p.get('k6_script') == 'bench/k6/crud.js'
+                        before = snapshot(server.database) if is_crud else None
+                        sequence_before = article_sequence(server.database) if is_crud else None
                         collector = None
                         telemetry = {'status': 'unavailable', 'reason': 'Collector could not be started'}
                         try:
@@ -386,6 +484,12 @@ def trials(p, cpus, output, checks):
                             if collector:
                                 telemetry = collector.stop()
                         save(directory / 'telemetry.json', telemetry)
+                        row.update(measurement=measured, telemetry=telemetry)
+                        if is_crud:
+                            row['database_check'] = verify_crud_state(
+                                before, snapshot(server.database), sequence_before,
+                                article_sequence(server.database), measured,
+                                p.get('crud_scenario', 'mix'), p.get('fixture_articles', 3))
                         diag_end = server.get_diagnostics() if p.get('diagnostics') else None
                         diag_data = {'start': diag_start, 'warmup': diag_warmup, 'end': diag_end} if p.get('diagnostics') else None
                         if diag_data:
@@ -396,9 +500,18 @@ def trials(p, cpus, output, checks):
                         err_rate = failed_reqs / total_reqs if total_reqs > 0 else 0.0
                         operations = measured.get('operations', {})
                         has_errors = (succ_reqs == 0) or (err_rate > p.get('max_error_rate', 0.05)) or (
-                            operations.get('failed', 0) > 0)
-                        final_status = 'failed' if has_errors else ('unstable' if not ready else 'passed')
-                        row.update(status=final_status, measurement=measured, telemetry=telemetry)
+                            operations.get('failed', 0) > 0) or measured.get('client_saturated', False) or (
+                            measured.get('iterations_dropped', 0) > 0)
+                        if is_crud:
+                            has_errors = has_errors or failed_reqs > 0
+                            scenario = p.get('crud_scenario', 'mix')
+                            if scenario != 'read':
+                                has_errors = has_errors or operations.get('writes', 0) == 0
+                            if scenario == 'mix':
+                                has_errors = has_errors or operations.get('reads', 0) == 0
+                        final_status = 'failed' if has_errors else (
+                            'verified' if verification_only else ('unstable' if not ready else 'passed'))
+                        row['status'] = final_status
                         if diag_data:
                             row.update(diagnostics=diag_data)
                     save(directory / 'trial.json', row)
@@ -508,20 +621,16 @@ def main():
             else:
                 checks = preflight(p['targets'],output/'preflight',p,cpus)
             if args.action == 'run' and p.get('k6_script') == 'bench/k6/crud.js':
-                required = {'create', 'create_invalid', 'update', 'update_invalid',
-                            'delete', 'json_create_invalid', 'csrf_invalid'}
-                missing = {target: sorted(case for case in required
-                    if checks[target].get('cases', {}).get(case, {}).get('status') != 'passed')
-                    for target in p['targets']}
-                missing = {target: cases for target, cases in missing.items() if cases}
+                missing = crud_gate(checks, p['targets'], p.get('crud_scenario', 'mix'))
                 if missing:
-                    raise RuntimeError(f'CRUD preflight requires passing write and CSRF cases: {missing}')
+                    raise RuntimeError(f'CRUD preflight requires matching successful operations: {missing}')
             if args.action == 'run':
                 rows = trials(p,cpus,output/'trials',checks)
                 save(output/'summary.json',{'purpose':'Benchmark trial execution summary',
                     'passed':sum(r['status']=='passed' for r in rows),'total':len(rows)})
                 report(output)
-                allowed_statuses = ('passed', 'excluded', 'unstable') if p.get('allow_unstable') else ('passed', 'excluded')
+                allowed_statuses = ('verified',) if p.get('verification_only') else (
+                    ('passed', 'excluded', 'unstable') if p.get('allow_unstable') else ('passed', 'excluded'))
                 if any(r['status'] not in allowed_statuses for r in rows):
                     return 1
             if any(not set(p['endpoints']).issubset(checks[n]['eligible_endpoints']) for n in p['targets']):

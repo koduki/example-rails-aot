@@ -27,9 +27,16 @@
 
 ## 正確性ゲート
 
+**後続の検証方針（この予備測定には適用しない）：** ベンチマーク専用の Rails
+設定では CSRF 検証を無効化し、Roundhouse 出力と条件を合わせる。CRUD の
+`mix` シナリオは読み取りと正常な更新だけを測定し、その操作の preflight
+一致を必須とする。無効入力の HTML/JSON と不正 CSRF の差は引き続き記録し、
+この限定した測定からアプリケーション全体の同等性や安全性を主張しない。
+手順と範囲は [ベンチマーク手順](benchmark.md#benchmark-only-crud-scope) を参照。
+
 測定前の preflight では、9構成について5種類の GET の HTTP 応答と DB 状態を Rails 基準と比較し、これらの読み取りは適格と判定した。初回性能測定の対象は7構成の `GET /articles` のみである。
 
-書き込みには未解決の差異がある。無効な create/update の HTML、JSON バリデーションエラー形式、不正 CSRF トークンでの書き込み拒否が一致しない。CRUD 性能測定はこの差異を修正して preflight が通過するまで実施しない。`crud.yml` の実行も preflight で遮断する。
+初回測定時、無効な create/update の HTML、JSON バリデーションエラー形式、不正 CSRF トークンでの書き込み拒否が一致せず、CRUD 性能測定を遮断した。その後の改修で正常系の操作だけを測る限定シナリオを追加した。現在の機能検証状況は[手順書](benchmark.md#benchmark-only-crud-scope)を参照。初回測定の数値や正確性判定を後続の実験に流用しない。
 
 ## 観測値
 

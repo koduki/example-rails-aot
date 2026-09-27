@@ -68,7 +68,11 @@ class AuxiliaryUnitTests(unittest.TestCase):
         self.assertEqual(p['cpu_count'], 1)
         self.assertEqual(p['driver'], 'k6')
         self.assertEqual(p['k6_script'], 'bench/k6/crud.js')
-        self.assertEqual(p['offered_rps'], 20)
+        self.assertEqual(p['offered_rps'], 2)
+        self.assertEqual(p['crud_scenario'], 'mix')
+        create_delete = run.config(ROOT / 'bench/profiles/crud-create-delete.yml')
+        self.assertEqual(create_delete['offered_rps'], 1)
+        self.assertEqual(create_delete['crud_scenario'], 'create_delete')
         crud_js = ROOT / p['k6_script']
         self.assertTrue(crud_js.exists())
 

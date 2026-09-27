@@ -169,3 +169,63 @@ GCE 測定を実施する際は、結果の信頼性を担保するため、以�
 - [ ] **ストレージ**: ディスク種類（Hyperdisk Balanced / pd-ssd）、マウントオプション、WAL 性能
 - [ ] **ネットワーク**: 分散構成時の内部 VPC レイテンシ（`ping -c 100` のジッター測定）
 - [ ] **バックグラウンドノイズ**: 測定前後の idle CPU 使用率（0.5% 以下であることを確認）
+# Benchmark-only CRUD scope
+
+`bench/profiles/crud.yml` uses the 90% read / 10% valid update scenario;
+`bench/profiles/crud-create-delete.yml` uses a valid create/delete cycle. The
+benchmark copy of the Rails application disables the CSRF verifier in
+`bench/runtime/production.rb`, matching the current Roundhouse output. The
+original `blog/` application retains its default CSRF protection. This is a
+benchmark policy, not evidence that the generated server safely rejects
+forged requests.
+
+The preflight still records invalid HTML and JSON writes. Its invalid-CSRF
+case is excluded because even the benchmark Rails reference no longer rejects
+the token; the source application still protects writes. Those cases are
+**not** eligible and are not measured as equivalent operations. The CRUD gate
+checks the successful operations used by the selected
+scenario: `update` for `mix`/`update`, `create` plus `delete` for
+`create_delete`. A missing or failed required case blocks the run. The `read`
+scenario also requires the selected GET endpoint to pass preflight.
+
+Run the preflight against freshly built images before using the CRUD profile;
+do not reuse a preflight result from a different source, image, or CSRF policy:
+
+```sh
+python3 scripts/bench/run.py build --profile bench/profiles/crud.yml --output bench-results/build
+python3 scripts/bench/run.py preflight --profile bench/profiles/crud.yml --output bench-results/preflight
+python3 scripts/bench/run.py run --profile bench/profiles/crud.yml \
+  --preflight-file bench-results/preflight/preflight.json --output bench-results/crud
+```
+
+On pull requests the benchmark workflow runs both short CRUD scenarios after
+the read smoke trial (2 operations/s for read/update, 1 operation/s for
+create/delete), across all nine runtime/JIT configurations. These profiles set `verification_only: true`: they run a fixed
+minimum warmup and mark successful trials `verified`, without claiming that
+five-second windows with only a few requests establish latency convergence.
+The runner rejects failed operations, dropped iterations, and client saturation.
+It also checks the SQLite state after each timed trial: updates must contain
+the values sent by k6, while create/delete must leave no new articles or
+comments and must advance the article sequence by the number of completed
+operations. A redirect alone does not certify persistence. CI fails if any
+target is not `verified`.
+
+The 2026-09-27 PR run at [Actions run 36307291456](https://github.com/koduki/example-rails-aot/actions/runs/36307291456)
+finished with 7 `passed` read/update trials and 4 `passed` plus 3 `unstable`
+create/delete trials, despite zero HTTP failures or dropped iterations. Its
+five-second warmup windows contained roughly five operations, so their p95
+fluctuation did not support a convergence claim. Those historical results are
+not a seven-target comparable create/delete measurement. This PR CI contract
+instead verifies functionality and persisted state; `verified` trials remain
+excluded from the statistical report. For latency comparisons, copy a CRUD
+profile, remove `verification_only`, use longer windows, warmup and repeated
+measurement periods, and reject `unstable` trials on a dedicated host. A fixed
+offered rate still does not establish maximum capacity or a JIT speedup ratio.
+
+The subsequent [Actions run 36320457786](https://github.com/koduki/example-rails-aot/actions/runs/36320457786)
+verified all nine targets in both scenarios: 9/9 `verified` for read/update and
+9/9 for create/delete. Every `database_check` passed, with zero failed HTTP
+requests and zero dropped iterations. The [raw artifact](https://github.com/koduki/example-rails-aot/actions/runs/36320457786/artifacts/10932791366)
+contains the preflight, per-trial measurements, database snapshots, and
+resource telemetry. These are functional checks under low offered load, not
+steady-state latency or capacity estimates.

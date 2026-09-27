@@ -1,17 +1,19 @@
 {
   "schema_version": 1,
-  "description": "CRUD auxiliary profile with 90/10 read/update mixed workload using bench/k6/crud.js",
-  "targets": ["rails-cruby-off", "rails-cruby-yjit", "emit-cruby-off", "emit-cruby-yjit", "rails-jruby", "emit-jruby", "spinel"],
+  "description": "Benchmark-only successful operations: 90/10 read/update, Rails CSRF verifier disabled to match emitted targets; invalid input and CSRF rejection are outside this workload",
+  "targets": ["rails-cruby-off", "rails-cruby-yjit", "emit-cruby-off", "emit-cruby-yjit", "rails-jruby", "rails-jruby-off", "emit-jruby", "emit-jruby-off", "spinel"],
   "endpoints": ["/articles"],
   "driver": "k6",
   "k6_script": "bench/k6/crud.js",
+  "crud_scenario": "mix",
   "fixture_articles": 100,
-  "offered_rps": 20,
+  "offered_rps": 2,
   "cpu_count": 1, "memory_mb": 3072, "threads": 3, "spinel_workers": 1,
   "repetitions": 1, "seed": 20260924,
   "warmup_min_seconds": 10, "warmup_max_seconds": 45,
   "window_seconds": 5, "stable_windows": 3, "max_cv": 0.25, "max_drift": 0.25,
   "measurement_seconds": 15, "connections": 4, "request_timeout": 5,
   "ready_timeout": 120, "total_timeout": 1800,
-  "allow_unstable": true
+  "verification_only": true,
+  "allow_unstable": false
 }

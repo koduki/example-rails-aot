@@ -111,6 +111,15 @@ class ReportUnitTests(unittest.TestCase):
             self.assertIn('trials', data)
             self.assertEqual(len(data['trials']), 3)
 
+    def test_functional_smoke_is_not_reported_as_comparable_latency(self):
+        aggregate = report.aggregate_target_endpoint([
+            {'target': 'rails-cruby-off', 'endpoint': '/articles', 'repetition': 1,
+             'status': 'verified', 'measurement': {'rps': 3, 'p95_ms': 10}}
+        ], 'rails-cruby-off', '/articles',
+            {'rails-cruby-off': {'eligible_endpoints': ['/articles']}}, 100, 0.001)
+        self.assertEqual(aggregate['valid_repetition_count'], 0)
+        self.assertIn('Functional smoke only', aggregate['excluded_reasons'][0]['reason'])
+
     def test_fixed_offered_rate_does_not_publish_capacity_ratios(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

@@ -1,6 +1,7 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { Counter, Trend } from 'k6/metrics';
+import exec from 'k6/execution';
 
 const checkFailures = new Counter('check_failures');
 const successfulOperations = new Counter('successful_operations');
@@ -49,12 +50,15 @@ function extractIdFromLocation(location) {
 
 export default function () {
   totalOperations.add(1);
-  const targetId = 1 + ((__VU * 31 + __ITER) % numArticles);
+  // __ITER resets for each VU; at saturation that turns newly allocated VUs
+  // into writes and silently changes the promised 90/10 workload.
+  const iteration = exec.scenario.iterationInTest;
+  const targetId = 1 + ((iteration * 31) % numArticles);
 
   let isWrite = false;
   if (scenarioType === 'mix') {
     // 90% read, 10% update
-    isWrite = (__ITER % 10 === 0);
+    isWrite = (iteration % 10 === 0);
   } else if (scenarioType === 'update' || scenarioType === 'create_delete') {
     isWrite = true;
   }
@@ -68,7 +72,7 @@ export default function () {
   if (!isWrite) {
     // READ OPERATION: GET /articles or GET /articles/:id
     readOperations.add(1);
-    const readUrl = (__ITER % 2 === 0)
+    const readUrl = (iteration % 2 === 0)
       ? `${baseUrl}/articles`
       : `${baseUrl}/articles/${targetId}`;
 
@@ -99,7 +103,7 @@ export default function () {
 
       const createPayload = {
         'authenticity_token': token,
-        'article[title]': `Ephemeral Article VU ${__VU} Iter ${__ITER}`,
+        'article[title]': `Ephemeral Article Iter ${iteration}`,
         'article[body]': 'Ephemeral body content for bounded CRUD load verification.',
       };
 
@@ -151,8 +155,8 @@ export default function () {
       const updatePayload = {
         'authenticity_token': token,
         '_method': 'patch',
-        'article[title]': `Article ${targetId} (VU ${__VU})`,
-        'article[body]': `Updated body for article ${targetId} at iteration ${__ITER}. Preserves bounded storage.`,
+        'article[title]': `Article ${targetId} (iteration ${iteration})`,
+        'article[body]': `Updated body for article ${targetId} at iteration ${iteration}. Preserves bounded storage.`,
       };
 
       const patchRes = http.post(`${baseUrl}/articles/${targetId}`, updatePayload, {
