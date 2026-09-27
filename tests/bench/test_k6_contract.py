@@ -1,5 +1,6 @@
 """Exercise the boundary between k6 summaries and the Python trial runner."""
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -73,6 +74,19 @@ const data = {state: {testRunDurationMs: 10000}, metrics: {
             self.assertIn('TARGET_URL=http://localhost:3000', args)
             self.assertIn('NUM_ARTICLES=100', args)
             self.assertNotIn('TARGET_URL=http://localhost:3000/articles', args)
+
+    def test_docker_k6_writes_summary_as_runner_user(self):
+        server = Mock(url='http://localhost:3000')
+        p = {'driver': 'k6', 'k6_script': 'bench/k6/crud.js',
+             'request_timeout': 5, 'offered_rps': 20}
+        with tempfile.TemporaryDirectory() as d, \
+             patch.object(run.subprocess, 'run', return_value=Mock(returncode=1)), \
+             patch.object(run, 'command', return_value='') as command:
+            with self.assertRaisesRegex(RuntimeError, 'no normalized summary'):
+                run.sample(server, '/articles', 5, p, {'client': [1]}, d)
+            args = command.call_args.args[0]
+            self.assertEqual(args[:5], ['docker', 'run', '--rm', '--user',
+                                        f'{os.getuid()}:{os.getgid()}'])
 
     def test_runner_rejects_stale_summary(self):
         server = Mock(url='http://localhost:3000')

@@ -12,6 +12,21 @@ sys.path.insert(0, str(ROOT / 'scripts/bench'))
 import run
 
 class SmokeProfileTests(unittest.TestCase):
+    def test_crud_gate_selects_only_workload_operations_and_fails_closed(self):
+        checks = {'rails': {'cases': {
+            'create': {'status': 'passed'}, 'delete': {'status': 'passed'},
+            'update': {'status': 'passed'}, 'csrf_invalid': {'status': 'failed'},
+            'create_invalid': {'status': 'failed'}}},
+            'emitted': {'cases': {'create': {'status': 'passed'},
+                                  'update': {'status': 'failed'}}}}
+        self.assertEqual(run.crud_gate(checks, ['rails'], 'mix'), {})
+        self.assertEqual(run.crud_gate(checks, ['rails', 'emitted'], 'mix'),
+                         {'emitted': ['update']})
+        self.assertEqual(run.crud_gate(checks, ['rails', 'emitted'], 'create_delete'),
+                         {'emitted': ['delete']})
+        self.assertEqual(run.crud_gate(checks, ['absent'], 'update'),
+                         {'absent': ['update']})
+
     def test_smoke_profile_validity_and_schedule(self):
         profile_path = ROOT / 'bench/profiles/smoke.yml'
         self.assertTrue(profile_path.exists(), "smoke.yml profile must exist")

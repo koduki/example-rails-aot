@@ -169,3 +169,36 @@ GCE 測定を実施する際は、結果の信頼性を担保するため、以�
 - [ ] **ストレージ**: ディスク種類（Hyperdisk Balanced / pd-ssd）、マウントオプション、WAL 性能
 - [ ] **ネットワーク**: 分散構成時の内部 VPC レイテンシ（`ping -c 100` のジッター測定）
 - [ ] **バックグラウンドノイズ**: 測定前後の idle CPU 使用率（0.5% 以下であることを確認）
+# Benchmark-only CRUD scope
+
+`bench/profiles/crud.yml` uses the 90% read / 10% valid update scenario;
+`bench/profiles/crud-create-delete.yml` uses a valid create/delete cycle. The
+benchmark copy of the Rails application disables the CSRF verifier in
+`bench/runtime/production.rb`, matching the current Roundhouse output. The
+original `blog/` application retains its default CSRF protection. This is a
+benchmark policy, not evidence that the generated server safely rejects
+forged requests.
+
+The preflight still records invalid HTML and JSON writes. Its invalid-CSRF
+case is excluded because even the benchmark Rails reference no longer rejects
+the token; the source application still protects writes. Those cases are
+**not** eligible and are not measured as equivalent operations. The CRUD gate
+checks the successful operations used by the selected
+scenario: `update` for `mix`/`update`, `create` plus `delete` for
+`create_delete`. A missing or failed required case blocks the run. The `read`
+scenario also requires the selected GET endpoint to pass preflight.
+
+Run the preflight against freshly built images before using the CRUD profile;
+do not reuse a preflight result from a different source, image, or CSRF policy:
+
+```sh
+python3 scripts/bench/run.py build --profile bench/profiles/crud.yml --output bench-results/build
+python3 scripts/bench/run.py preflight --profile bench/profiles/crud.yml --output bench-results/preflight
+python3 scripts/bench/run.py run --profile bench/profiles/crud.yml \
+  --preflight-file bench-results/preflight/preflight.json --output bench-results/crud
+```
+
+On pull requests the benchmark workflow runs both short CRUD scenarios after
+the read smoke trial. They check correctness and the runner path; the hosted
+runner's single short trial does not establish a capacity ratio. Repeat the
+workload with controlled arrival rates on a dedicated host for that claim.

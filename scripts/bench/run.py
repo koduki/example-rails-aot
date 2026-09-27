@@ -21,6 +21,27 @@ from preflight import HttpClient, READS, capture, check_probe, compare
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGETS = json.loads((ROOT / 'bench/targets.yml').read_text())
+CRUD_CASES = {
+    'mix': frozenset(('update',)),
+    'update': frozenset(('update',)),
+    'create_delete': frozenset(('create', 'delete')),
+    'read': frozenset(),
+}
+
+def crud_gate(checks, targets, scenario):
+    """Admit only the successful operations the selected workload executes.
+
+    Error rendering and invalid CSRF are still captured by preflight, but are
+    not operations in this benchmark-only workload. A missing case fails shut.
+    """
+    required = CRUD_CASES[scenario]
+    missing = {}
+    for target in targets:
+        failed = sorted(case for case in required
+                        if checks.get(target, {}).get('cases', {}).get(case, {}).get('status') != 'passed')
+        if failed:
+            missing[target] = failed
+    return missing
 
 def save(path, data):
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
@@ -58,6 +79,8 @@ def config(path):
         raise ValueError('fixture_articles must be an integer >= 3 for the preflight paths')
     if p.get('driver') == 'k6' and (type(p.get('offered_rps')) not in (int, float) or p['offered_rps'] <= 0):
         raise ValueError('k6 offered_rps must be positive')
+    if p.get('k6_script') == 'bench/k6/crud.js' and p.get('crud_scenario', 'mix') not in CRUD_CASES:
+        raise ValueError('Unknown CRUD scenario')
     minimum = len(p['targets']) * len(p['endpoints']) * p['repetitions'] * (
         p['warmup_min_seconds'] + p['measurement_seconds'])
     if p['total_timeout'] < minimum:
@@ -221,6 +244,7 @@ def report(output):
     eligible = sorted(set.intersection(*(set(v.get('eligible_endpoints',[])) for v in checks.values()))) if checks else []
     data = {'purpose':'P0 validity and execution status; not a capacity ranking',
             'eligible_common_reads':eligible,
+            'crud_gate_policy':'successful operations only; invalid responses remain failed and CSRF rejection is excluded under the benchmark policy',
             'preflight':{name:{'eligible_endpoints':value.get('eligible_endpoints',[]),
                 'cases':{case:entry['status'] for case,entry in value.get('cases',{}).items()},
                 'status':value.get('status','checked')} for name,value in checks.items()}}
@@ -312,10 +336,12 @@ def sample(server, endpoint, duration, p, cpus, directory=None):
         if has_local_k6:
             k6_args = ['taskset', '-c', client_cpus, 'k6', 'run', str(script_path),
                        *env_args, '-e', f'SUMMARY_PATH={summary_path}']
-            command(k6_args, timeout=duration + p['request_timeout'] + 30)
+            command(k6_args, timeout=duration + p['request_timeout'] + 30,
+                    log=output_dir / 'k6.log')
         else:
             k6_args = [
                 'docker', 'run', '--rm',
+                '--user', f'{os.getuid()}:{os.getgid()}',
                 '--cpuset-cpus', client_cpus,
                 '--network', 'host',
                 '-v', f'{script_path.resolve()}:/test_script.js:ro',
@@ -324,10 +350,13 @@ def sample(server, endpoint, duration, p, cpus, directory=None):
                 '-e', 'SUMMARY_PATH=/output/k6-summary.json',
                 'grafana/k6:latest', 'run', '/test_script.js'
             ]
-            command(k6_args, timeout=duration + p['request_timeout'] + 60)
+            command(k6_args, timeout=duration + p['request_timeout'] + 60,
+                    log=output_dir / 'k6.log')
 
         if not summary_path.exists():
-            raise RuntimeError(f'k6 produced no normalized summary: {summary_path}')
+            log_path = output_dir / 'k6.log'
+            detail = log_path.read_text(encoding='utf-8')[-1200:] if log_path.exists() else 'no k6 log'
+            raise RuntimeError(f'k6 produced no normalized summary: {summary_path}\n{detail}')
         measured = json.loads(summary_path.read_text(encoding='utf-8'))
         required = ('elapsed', 'rps', 'p95_ms', 'requests_total', 'requests_successful',
                     'requests_failed', 'iterations_dropped', 'client_saturated')
@@ -508,14 +537,9 @@ def main():
             else:
                 checks = preflight(p['targets'],output/'preflight',p,cpus)
             if args.action == 'run' and p.get('k6_script') == 'bench/k6/crud.js':
-                required = {'create', 'create_invalid', 'update', 'update_invalid',
-                            'delete', 'json_create_invalid', 'csrf_invalid'}
-                missing = {target: sorted(case for case in required
-                    if checks[target].get('cases', {}).get(case, {}).get('status') != 'passed')
-                    for target in p['targets']}
-                missing = {target: cases for target, cases in missing.items() if cases}
+                missing = crud_gate(checks, p['targets'], p.get('crud_scenario', 'mix'))
                 if missing:
-                    raise RuntimeError(f'CRUD preflight requires passing write and CSRF cases: {missing}')
+                    raise RuntimeError(f'CRUD preflight requires matching successful operations: {missing}')
             if args.action == 'run':
                 rows = trials(p,cpus,output/'trials',checks)
                 save(output/'summary.json',{'purpose':'Benchmark trial execution summary',

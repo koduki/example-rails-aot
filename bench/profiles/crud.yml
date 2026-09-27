@@ -1,10 +1,11 @@
 {
   "schema_version": 1,
-  "description": "CRUD auxiliary profile with 90/10 read/update mixed workload using bench/k6/crud.js",
+  "description": "Benchmark-only successful operations: 90/10 read/update, Rails CSRF verifier disabled to match emitted targets; invalid input and CSRF rejection are outside this workload",
   "targets": ["rails-cruby-off", "rails-cruby-yjit", "emit-cruby-off", "emit-cruby-yjit", "rails-jruby", "emit-jruby", "spinel"],
   "endpoints": ["/articles"],
   "driver": "k6",
   "k6_script": "bench/k6/crud.js",
+  "crud_scenario": "mix",
   "fixture_articles": 100,
   "offered_rps": 20,
   "cpu_count": 1, "memory_mb": 3072, "threads": 3, "spinel_workers": 1,
