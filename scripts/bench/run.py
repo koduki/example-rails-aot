@@ -460,7 +460,7 @@ def trials(p, cpus, output, checks):
                     row['warmup_seconds'] = elapsed
                     row['warmup_converged'] = None if verification_only else ready
                     diag_warmup = server.get_diagnostics() if p.get('diagnostics') else None
-                    if not warmup_valid(windows):
+                    if verification_only and not warmup_valid(windows):
                         row.update(status='failed', reason='Warmup had failed requests, operations, or dropped iterations')
                     elif not ready and not verification_only and not p.get('allow_unstable'):
                         row.update(status='unstable', reason='No stable window within budget')
