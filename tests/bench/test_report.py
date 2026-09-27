@@ -129,7 +129,7 @@ class ReportUnitTests(unittest.TestCase):
             data = report.build_report(root)
             self.assertTrue(data['fixed_offered_rate'])
             self.assertEqual(data['pairwise_comparisons'], [])
-            self.assertIn('does not establish maximum capacity', (root / 'summary.md').read_text())
+            self.assertIn('does not establish maximum capacity', (root / 'summary.md').read_text(encoding='utf-8'))
 
 if __name__ == '__main__':
     unittest.main()
