@@ -1,210 +1,110 @@
-# Rails → Roundhouse → Spinel AOT
+# Rails × Roundhouse × Spinel AOT
 
-Rails 8.1.3.1 の Article / Comment ブログを [Roundhouse](https://github.com/rubys/roundhouse) で変換し、[Spinel](https://github.com/matz/spinel) で Linux x86-64 のネイティブバイナリ（AOT 実行ファイル）にします。
+Rails アプリを [Roundhouse](https://github.com/rubys/roundhouse) で変換し、[Spinel](https://github.com/matz/spinel) でネイティブ実行するまでを再現する実験リポジトリです。Rails のまま実行した場合、Roundhouse 変換後に Ruby で実行した場合、Spinel AOT で実行した場合の**応答の正確性と性能**を調べます。
 
-Rails 版と AOT バイナリ版の挙動一致を自動判定する差分比較テストスイート、Ruby/Spinel を含まない軽量実行用コンテナ（Dockerfile）、および全工程を検証する GitHub Actions パイプラインを備えています。
+## このリポジトリの目的
 
----
+中心となる問いは「Roundhouse によって CRuby の YJIT と JRuby の JIT の効果はどう変わり、Spinel AOT の実行系全体と比べてどう見えるか」です。ベンチマークでは Rails／変換後 Ruby を CRuby（YJIT 有無）・JRuby（JRuby JIT 有無）で動かし、Spinel と比較します。JRuby の JIT 設定は JVM の JIT と別です。変換前の Rails をそのまま Spinel でビルドする経路は対象外です。
 
-## 対象 Issue と達成状況
+実験には二つの系統があります。
 
-| Issue | 内容 | 状態 | 検証内容 |
-|---|---|---|---|
-| **#1** | Rails 8.1.3.1 ブログサンプルの生成 | 完了 | 21テスト・54アサーション成功。モデル・コントローラ・Turbo Streams 基準動作確定 |
-| **#2** | 再現可能なビルド環境 | 完了 | Roundhouse v2026.9.18 / Spinel 2026.09.12 を SHA-256 検証付きで固定導入 |
-| **#3** | Spinel 向け strict 変換 | 完了 | CSS / Hotwire アセットを取り込み、Roundhouse strict 変換で `out/spinel` を生成 |
-| **#4** | Spinel による AOT ビルド & 永続化 | 完了 | `blog` バイナリ生成、GET /articles、422 入力検証、再起動後の SQLite 保持確認 |
-| **#5** | Rails 版と AOT 版の差分比較テスト | 完了 | 同一初期 DB・別ポートで起動し、HTTP ステータス・ヘッダー・DOM・DB 最終状態を自動判定 |
-| **#6** | 差分の調査・修正・制約の明確化 | 完了 | JSON 分岐 drop 警告の影響を特定・文書化。回帰テスト整備 |
-| **#7** | GitHub Actions 統合パイプライン | 完了 | Rails テスト、変換、AOT ビルド、差分比較、コンテナ検証を単一 CI で一貫実行 |
-| **#8** | 再現手順、比較結果、配布物の文書化 | 完了 | 本ドキュメントにて手順、制約、配布物の利用方法を完全記載 |
-| **#9** | AOT 実行用コンテナ | 完了 | マルチステージ Dockerfile、Ruby なし軽量イメージ、Volume による SQLite 永続化を検証 |
-| **#11〜#20** | ベンチマーク基盤・JIT 診断・初回測定公開 | 予備測定 | 7 構成の同一ジョブ逐次 smoke 測定。倍率は各1回・10秒の観測値で、本測定と容量探索は未実施 |
-| **#21** | 4 コア・大規模データ・CRUD・起動・ビルド補助評価 | 完了 | 1,000 件 fixture・共通ページング、bench/k6/crud.js (90/10 mix)、初回業務応答時間 (Spinel 0.17s vs Rails 2.29s) を測定 |
+| 系統 | 役割 | 対象 |
+| --- | --- | --- |
+| [`blog/`](blog/) と [AOT Actions](.github/workflows/aot.yml) | Rails アプリの変換、AOT ビルド、HTTP・DB 動作比較、Ruby 不要の実行コンテナ検証 | 元アプリは Rails **8.1.3.1** |
+| [`bench/`](bench/) と [Benchmark Actions](.github/workflows/benchmark.yml) | 同一 fixture と資源条件でランタイムを比較し、正確性ゲート・生データ・測定レポートを保存 | JRuby の互換性に合わせた測定用コピーは Rails **8.0.5.1** |
 
----
+測定前に HTTP 応答と DB の結果を Rails 基準と比較します。性能が良く見えても、対象の操作が一致しなければ測定対象から除外します。Spinel との比較には AOT バイナリだけでなく HTTP サーバーや DB アダプターの差も含まれます。
 
-## 固定バージョン
+## 調査レポートのサマリー
 
-| コンポーネント | 固定バージョン | 備考 |
-|---|---|---|
-| **Ruby** | 3.4.5 | CI およびビルド環境 |
-| **Rails** | 8.1.3.1 | 最新リリース（scaffold + Turbo Streams） |
-| **Bundler** | 2.6.9 | |
-| **Roundhouse** | v2026.9.18 | `config/toolchain.env` の SHA-256 で整合性検証 |
-| **Spinel** | 2026.09.12 | `config/toolchain.env` の SHA-256 で整合性検証 |
+[初回調査レポート](docs/benchmark-results.md)は [Actions 実行 36289166814](https://github.com/koduki/example-rails-aot/actions/runs/36289166814) の**予備測定**です。測定コミットは `e1dd3903de9dfcc8b87a16f222d0ebe43ca8c614`。GitHub hosted runner 上で、同じ3記事・3コメントの SQLite fixture を使い、`GET /articles` を各構成1回、4接続・10秒の closed-loop 方式で測定しました。以下はその試行での観測値です。
 
----
+| 実行系 | ターゲット ID | JIT | Roundhouse | RPS | p50 | コンテナメモリ最大 | 判定 |
+| --- | --- | --- | :---: | ---: | ---: | ---: | --- |
+| CRuby / Rails | `rails-cruby-off` | Off | なし | 270.60 | 14.55 ms | 109.30 MB | passed |
+| CRuby / 変換後 Ruby | `emit-cruby-off` | Off | あり | 2,268.48 | 1.72 ms | 41.58 MB | passed |
+| CRuby / Rails | `rails-cruby-yjit` | YJIT On | なし | 447.53 | 8.66 ms | 133.60 MB | passed |
+| CRuby / 変換後 Ruby | `emit-cruby-yjit` | YJIT On | あり | 3,021.03 | 1.29 ms | 50.16 MB | passed |
+| JRuby / Rails | `rails-jruby-off` | JRuby JIT Off | なし | — | — | — | 診断対象・初回測定なし |
+| JRuby / 変換後 Ruby | `emit-jruby-off` | JRuby JIT Off | あり | — | — | — | 診断対象・初回測定なし |
+| JRuby / Rails | `rails-jruby` | JRuby JIT On | なし | 26.86 | 121.38 ms | 616.70 MB | passed |
+| JRuby / 変換後 Ruby | `emit-jruby` | JRuby JIT On | あり | 1,258.74 | 2.48 ms | 424.90 MB | **unstable** |
+| Spinel AOT | `spinel` | 対象外（AOT） | あり | 4,353.36 | 0.89 ms | 12.54 MB | passed |
+| Spinel / 未変換 Rails | — | 対象外 | なし | — | — | — | ビルド経路なし |
 
-## ディレクトリ構成と役割
+この短い試行の処理量比は、Roundhouse／Rails が CRuby JIT Off で **8.38 倍**、YJIT On で **6.75 倍**、Spinel／Rails CRuby JIT Off が **16.09 倍**でした。YJIT On／Off は Rails で **1.65 倍**、変換後 Ruby で **1.33 倍**、両倍率の比は **0.805** です。JRuby JIT Off は初回測定の7構成に含まれず、JIT 有無の効果はこの表から比較できません。Roundhouse 変換後の JRuby JIT On はウォームアップが収束せず、順位付けや倍率比較に使いません。JRuby JIT Off にしても JVM JIT は有効です。メモリはコンテナ使用量でありプロセス RSS ではありません。
 
-- `blog/`: 元の Rails 8.1.3.1 アプリケーション（Article, Comment, バリデーション, ビュー, テスト）。
-- `config/toolchain.env`: 固定ツールチェーンのバージョンと SHA-256 チェックサム定義。
-- `out/spinel/`: Roundhouse による Spinel 向け Ruby 変換コード（Git には含めず再生成）。
-- `scripts/`:
-  - `test-rails.sh`: Rails アプリのモデル・コントローラテスト実行。
-  - `install-toolchain.sh`: Roundhouse / Spinel のダウンロード・コンパイル・配置。
-  - `prepare-assets.sh`: Tailwind CSS と Hotwire JavaScript のバンドル準備。
-  - `transpile.sh`: Roundhouse による strict モード変換。
-  - `build.sh`: Spinel による AOT コンパイルと `out/runtime` パッケージング。
-  - `smoke-native.sh`: AOT バイナリのスモークテスト（HTTP 応答・再起動後データ保持）。
-  - `compare.py`: Rails 版と AOT 版の差分比較テストスイート（Python 3 標準ライブラリ製）。
-  - `run-comparison.sh`: サーバー同時起動と差分比較のオーケストレーション。
-  - `test-container.sh`: Docker コンテナのビルド・永続化・ロード自動検証。
-- `artifacts/`: ビルド成果物（AOT バイナリパッケージ、Docker イメージアーカイブ等）。
-- `reports/`: ログ、LDD 依存、C コンパイルログ、差分レポート。
+事前比較では全9構成の5種類の読み取り経路が適格でした。一方、無効な書き込みの HTML 表示、JSON バリデーションエラー、不正 CSRF トークンの拒否には差が残るため、**CRUD の性能測定は遮断**しています。上記の倍率は最大処理容量や JIT の因果的な寄与を示しません。専用 GCE ホストでの反復測定、open-arrival 負荷での容量探索は未実施です。条件、p95/p99、CPU、除外理由、次の検証項目は[調査レポート](docs/benchmark-results.md)に記載しています。
 
----
+### 結果の採用条件
 
-## ローカルでの再現手順
+1. `preflight/preflight.json` で**そのターゲット・経路**が `eligible_endpoints` に含まれること。読み取りが通っても書き込みの適格性は得られません。
+2. `trials/per-run.json` の試行状態が `passed` であること。`unstable`、`excluded`、`failed`、`not_run` を性能倍率に混ぜません。
+3. 条件が揃った試行の `summary.md` と生データを併せて読むこと。固定 offered RPS の測定値から最大処理容量の倍率は算出しません。
 
-Ubuntu 24.04 x86-64（または WSL2 / Docker）環境で以下を実行します。
+## 人間による再現実験
 
-### 1. 依存ライブラリのインストール
+リポジトリのルートから実行します。**Linux x86-64、Docker Engine、Python 3.11 以降、2つ以上の利用可能な論理 CPU**が必要です。Docker イメージのビルドにはネットワークと空きディスク容量も必要です。以下のベンチマーク経路ではホストへの Ruby インストールは不要です。
+
+### 1. AOT アプリを起動する
+
+Docker のマルチステージビルドで固定版の Roundhouse と Spinel を導入し、Ruby を含まない実行イメージを作ります。
+
 ```bash
-sudo apt-get update
-sudo apt-get install -y --no-install-recommends \
-  clang make libsqlite3-dev libjemalloc-dev libssl-dev zlib1g-dev sqlite3 pkg-config python3
+git clone https://github.com/koduki/example-rails-aot.git
+cd example-rails-aot
+docker build -t example-rails-aot:local .
+docker volume create example_rails_aot_data
+docker run -d --name example-rails-aot-demo -p 3000:3000 \
+  -v example_rails_aot_data:/app/storage example-rails-aot:local
+curl http://127.0.0.1:3000/articles
 ```
 
-### 2. Rails テストとツールチェーン導入
+作成・再起動後の SQLite 永続化やコンテナの保存・復元は `bash scripts/test-container.sh` で確認できます。ローカルに Ruby 3.4.5、Bundler 2.6.9、Node.js とネイティブビルド依存を用意した場合は、以下で Rails と AOT の差分比較もできます。
+
 ```bash
-# Rails ベースラインテスト
 bash scripts/test-rails.sh
-
-# 固定版 Roundhouse / Spinel 導入
 bash scripts/install-toolchain.sh
-```
-
-### 3. AOT バイナリのビルドとスモークテスト
-```bash
-# strict 変換とネイティブコンパイル
 bash scripts/build.sh
-
-# バイナリの起動・作成・再起動永続化スモークテスト
 bash scripts/smoke-native.sh
-```
-
-### 4. Rails 版 vs AOT 版の差分比較テスト (#5)
-```bash
 bash scripts/run-comparison.sh
 ```
-両サーバー（Rails: 33000、AOT: 38000）が同一の初期 SQLite DB で起動し、同一操作列を実行して結果を検証します。差分レポートは `reports/differential/` に出力されます。
 
----
+差分比較は `reports/differential/` に記録されます。必要な依存パッケージと実行順は [AOT Actions](.github/workflows/aot.yml)、ツールの固定版は [`config/toolchain.env`](config/toolchain.env) を参照してください。
 
-## 差分比較結果と正規化規則 (#5, #6)
+### 2. 予備ベンチマークを再実行する
 
-### 比較対象操作
-1. **記事一覧 (`GET /articles`)**: 初期 3 記事の DOM 構造一致
-2. **新規作成フォーム (`GET /articles/new`)**: フォーム入力要素一致
-3. **作成バリデーションエラー (`POST /articles` 空入力)**: 422 Unprocessable Content およびエラーメッセージ一致
-4. **記事作成正常系 (`POST /articles`)**: 302/303 リダイレクト、Location (`/articles/4`)、DB 挿入一致
-5. **記事詳細 (`GET /articles/4`)**: タイトル、本文、コメントフォームの一致
-6. **編集フォーム (`GET /articles/4/edit`)**: 既存値の展開一致
-7. **更新バリデーションエラー (`PATCH /articles/4` 空入力)**: 422 ステータスおよびエラー表示一致
-8. **記事更新正常系 (`PATCH /articles/4`)**: 302/303 リダイレクト、Location、DB 更新一致
-9. **コメント作成 (`POST /articles/4/comments`)**: 302 リダイレクト、詳細画面での表示、DB 挿入一致
-10. **コメント削除 (`DELETE /articles/4/comments/4`)**: 302 リダイレクト、詳細画面からの削除、DB 削除一致
-11. **記事削除 (`DELETE /articles/4`)**: 302/303 リダイレクト、一覧からの削除、DB 削除一致
-12. **SQLite 最終状態 (`case_12_database_equivalence`)**: `articles` / `comments` テーブルの全レコード完全一致
+CPU の指定値は環境に合わせて変更してください。`lscpu -e=CPU,CORE,ONLINE` と `taskset -pc $$` で利用可能な CPU と SMT の兄弟関係を確認し、アプリと負荷生成器に**異なる物理コア**の CPU を割り当てます。下の `0` と `2,3` は記入例です。CPU 0 が使用できない環境や兄弟スレッドが重なる環境ではそのまま実行しないでください。
 
-### 正規化規則
-- **CSRF トークン**: `authenticity_token` (`<input>` および `<meta>`) は `[CSRF_TOKEN]` に置換して比較。
-- **動的タイムスタンプ**: `\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}...` は `[TIMESTAMP]` に正規化。
-- **DOM 意味構造比較**: `<main>` または `<body>` タグ内の意味的要素・通知（flash）を抽出し、空白・改行揺れを吸収。
-- **Location ヘッダー**: ホスト/ポートを除外した相対パスで比較。
-
-### 既知の制約と差異 (Issue #6 分析)
-- **JSON 応答分岐の drop**:
-  `ArticlesController` の `create` / `update` において、`format.json` 分岐に以下の警告が出ます：
-  `warning[lower_residue]: respond_to arm format.json dropped (inline render json: <expr> needs an encoder this tree has none for) — this action answers every format with its html branch`
-  Roundhouse の本バージョンではインライン JSON エンコーダーがモデルされていないため、`format.json` アームは HTML ブランチにフォールバックします。ブラウザによる HTML CRUD 操作は完全一致しますが、`Accept: application/json` や `.json` リクエストに対しては HTML が返されます。この挙動は `case_13_json_format_negotiation` で記録・文書化されています。
-
----
-
-## AOT 実行用 Docker コンテナ (#9)
-
-Ruby, Rails, Spinel を含まない軽量コンテナイメージを提供します。
-
-### Dockerfile の特徴
-- **マルチステージビルド**:
-  - `builder`: 公式 `ruby:3.4.5-bookworm` 上でツールチェーンをセットアップし、AOT バイナリ `blog` をビルド。
-  - `runtime`: Ubuntu 24.04 最小ベースにバイナリ、静的アセット、必要ライブラリ（`libsqlite3-0`, `libjemalloc2`）のみを配置。
-- **PID 1 実行**: `docker-entrypoint.sh` から `exec /app/blog` することでシグナルを正常ハンドリング。
-- **SQLite データの永続化**: `/app/storage` をボリュームとしてマウント可能。初回起動時に DB がなければ `db/seed.sql` から自動初期化。
-
-### コンテナのビルドと起動
 ```bash
-# 1. コンテナイメージのビルド
-docker build -t example-rails-aot:latest .
-
-# 2. ボリュームを指定して起動（ポート 3000）
-docker volume create blog_storage
-docker run -d \
-  --name blog-app \
-  -p 3000:3000 \
-  -v blog_storage:/app/storage \
-  example-rails-aot:latest
-
-# 3. ブラウザでアクセス
-curl http://localhost:3000/articles
+APP_CPUS=0
+LOAD_CPUS=2,3
+python3 -m unittest discover -s tests/bench -q
+python3 scripts/bench/run.py run --profile bench/profiles/smoke.yml \
+  --app-cpus "$APP_CPUS" --load-cpus "$LOAD_CPUS" --dry-run
+python3 scripts/bench/run.py build --profile bench/profiles/smoke.yml \
+  --app-cpus "$APP_CPUS" --load-cpus "$LOAD_CPUS" --output bench-results/build-local-01
+python3 scripts/bench/run.py preflight --profile bench/profiles/smoke.yml \
+  --app-cpus "$APP_CPUS" --load-cpus "$LOAD_CPUS" --output bench-results/preflight-local-01
+python3 scripts/bench/run.py run --profile bench/profiles/smoke.yml \
+  --app-cpus "$APP_CPUS" --load-cpus "$LOAD_CPUS" \
+  --preflight-file bench-results/preflight-local-01/preflight/preflight.json \
+  --output bench-results/measurement-local-01
+python3 scripts/bench/run.py report --output bench-results/measurement-local-01
 ```
 
-### コンテナ検証スクリプト
+`--output` には**毎回新しいディレクトリ名**を指定します。標準の smoke profile は主7構成を測定します。JRuby JIT Off の診断2構成も検証する場合は、[ターゲット一覧](bench/targets.yml)の ID を `--targets` に指定してください。事前検証の `preflight-local-01/preflight/preflight.json` で対象経路の適格性を確認してから、測定結果の `summary.md`、`summary.csv`、`trials/per-run.json`、各試行の `warmup.json` と `telemetry.json` を読みます。失敗や未収束の試行を倍率に混ぜないでください。
+
+上記は**現行コードの再測定**です。表の数値そのものを追試する場合は、次のように測定コミットを別の作業ツリーに展開し、そこで手順2を実行します。レポートに記載した profile・fixture・CPU 配置・測定条件を使用してください。
+
 ```bash
-bash scripts/test-container.sh
+git fetch origin e1dd3903de9dfcc8b87a16f222d0ebe43ca8c614
+git worktree add --detach ../example-rails-aot-pilot e1dd3903de9dfcc8b87a16f222d0ebe43ca8c614
+cd ../example-rails-aot-pilot
 ```
-イメージビルド、Ruby/Spinel 不在の検証、記事作成、コンテナ再作成後のボリューム永続化確認、`docker save` と `docker load` を自動検証します。
 
----
+hosted runner の物理環境を完全には再現できないため、数値の一致は保証されません。より長い実験の設定、k6 による open-arrival 測定、GCE 移行時の注意点は[ベンチマーク手順](docs/benchmark.md)と[`bench/README.md`](bench/README.md)にあります。Roundhouse の処理の仕組みと、本リポジトリの測定で変わる範囲は[アーキテクチャ Appendix](docs/provenance.md#appendix-roundhouse-architecture-v2026918)を参照してください。
 
-## GitHub Actions パイプライン (#7)
+## ライセンス
 
-ワークフロー [`.github/workflows/aot.yml`](.github/workflows/aot.yml) により、プッシュおよび PR ごとに以下を自動検証します。
-
-1. **`build-and-test`**:
-   - Rails ベースラインテスト (`scripts/test-rails.sh`)
-   - Strict 変換 & Spinel ネイティブコンパイル (`scripts/build.sh`)
-   - スモークテスト (`scripts/smoke-native.sh`)
-   - **Rails vs AOT 差分比較テスト (`scripts/run-comparison.sh`)**
-2. **`container-verification`**:
-   - マルチステージ Docker イメージビルド
-   - Ruby/Spinel 不在確認
-   - ボリューム永続化スモークテスト (`scripts/test-container.sh`)
-   - Docker イメージアーカイブ作成
-3. **`runtime-without-ruby`**:
-   - Ruby / Spinel のないクリーンな Ubuntu コンテナ内でのバイナリ直接動作検証
-
-### 配布物 (Artifacts)
-- `native-runtime-<sha>`: Linux x86-64 実行バイナリ、静的アセット、seed SQL のアーカイブ (`blog-linux-x86_64.tar.gz`)。
-- `container-image-<sha>`: `docker load` 可能な Docker イメージアーカイブ (`blog-container-image.tar.gz`)。
-- `diagnostics-<sha>`: ビルドログ、C コンパイルログ、差分比較結果 (`reports/differential/summary.json` 等)。
-
----
-
-## ベンチマーク評価と JIT 比較 (#11〜#21)
-
-Rails、Roundhouse 事前変換コード、Spinel AOT バイナリを同一の SQLite fixture および 1 専有 CPU 環境で公平に対比較するベンチマークスイートを実装しています。
-
-詳細な実行手順・契約仕様は [docs/benchmark.md](docs/benchmark.md)、測定結果・JIT 相互作用分析・未解決ブロッカーの考察・補助評価は [docs/benchmark-results.md](docs/benchmark-results.md) を参照してください。
-
-### 初回測定結果サマリー (`GET /articles`)
-
-GitHub Actions Hosted Runner 上の closed-loop smoke 測定（各構成1回・10秒、3記事 fixture）。専用物理コアの測定ではなく、以下の倍率は予備的な観測値です。測定用アプリは Rails 8.0.5.1 / JRuby 10.0.7.0 で、元の `blog/` の Rails 8.1.3.1 とは依存関係が異なります。
-
-| ターゲット | 実行スタック | スループット (RPS) | レイテンシ p50 | コンテナメモリ最大 | 試行内の倍率 | 初回業務応答 (起動) |
-|---|---|---:|---:|---:|:---:|:---:|
-| `rails-cruby-off` | Rails 8 + Puma + CRuby (JIT Off) | 270.6 RPS | 14.55 ms | 109.3 MB | 基準 (1.0x) | 2.29 秒 |
-| `rails-cruby-yjit` | Rails 8 + Puma + CRuby (YJIT On) | 447.5 RPS | 8.66 ms | 133.6 MB | YJIT 1.65x | 2.87 秒 |
-| `emit-cruby-off` | Roundhouse 変換 + Puma + CRuby (JIT Off) | 2,268.5 RPS | 1.72 ms | 41.6 MB | **Roundhouse 8.38x** | **0.70 秒 (3.3x 高速)** |
-| `emit-cruby-yjit` | Roundhouse 変換 + Puma + CRuby (YJIT On) | 3,021.0 RPS | 1.29 ms | 50.2 MB | **Roundhouse 6.75x** (対 YJIT) | **0.70 秒 (4.1x 高速)** |
-| `spinel` | Spinel AOT 単一バイナリ (C-HTTP / DB) | 4,353.4 RPS | 0.89 ms | 12.5 MB | **全体スタック差 16.09x** | **0.17 秒 (13.5x 高速)** |
-
-- **Roundhouse / YJIT**: この短い試行での処理量比は CRuby Off で 8.38、YJIT で 6.75、YJIT 相互作用比は 0.805。定常時の容量や内部機構は未検証です。
-- **Spinel**: 試行内の比は Rails CRuby Off に対し 16.09。HTTP サーバーと DB アダプターを含む実行系全体の比較です。
-- **補助評価 (#21)**: 1,000 件 fixture を作る補助関数と CRUD シナリオを用意しています。HTTP ページネーションは未実装で、CRUD 測定は書き込みの正確性ゲートが通るまで遮断します。
-
----
-
-ツールチェーンの選定根拠や生成元、変換警告の詳細な記録については [provenance.md](docs/provenance.md) を参照してください。
+このリポジトリの独自のコードと文書は [Apache License 2.0](LICENSE) で公開します。[同梱の Roundhouse 由来スクリプト](scripts/vendor/create-blog)は[別途 MIT License](scripts/vendor/LICENSE-MIT) です。Roundhouse、Spinel、Rails や生成物に含まれる第三者のソフトウェアには各自のライセンスが適用されます。
