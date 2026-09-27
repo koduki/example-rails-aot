@@ -61,6 +61,9 @@ const data = {state: {testRunDurationMs: 10000}, metrics: {
             self.assertIn('TARGET_URL=http://localhost:3000/articles', args)
 
     def test_crud_uses_base_url_and_actual_fixture_size(self):
+        source = (ROOT / 'bench/k6/crud.js').read_text()
+        self.assertIn('exec.scenario.iterationInTest', source)
+        self.assertNotIn('__ITER % 10', source)
         server = Mock(url='http://localhost:3000')
         p = {'driver': 'k6', 'k6_script': 'bench/k6/crud.js', 'fixture_articles': 100,
              'request_timeout': 5, 'offered_rps': 20}
