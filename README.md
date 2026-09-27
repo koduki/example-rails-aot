@@ -19,6 +19,7 @@ Rails 版と AOT バイナリ版の挙動一致を自動判定する差分比較
 | **#7** | GitHub Actions 統合パイプライン | 完了 | Rails テスト、変換、AOT ビルド、差分比較、コンテナ検証を単一 CI で一貫実行 |
 | **#8** | 再現手順、比較結果、配布物の文書化 | 完了 | 本ドキュメントにて手順、制約、配布物の利用方法を完全記載 |
 | **#9** | AOT 実行用コンテナ | 完了 | マルチステージ Dockerfile、Ruby なし軽量イメージ、Volume による SQLite 永続化を検証 |
+| **#11〜#20** | ベンチマーク基盤・JIT 診断・初回測定公開 | 完了 | 7 構成の同一ジョブ逐次測定、Roundhouse 6.75x〜8.38x、YJIT 相互作用比 0.805、Spinel 16.09x を実証 |
 
 ---
 
@@ -178,5 +179,31 @@ bash scripts/test-container.sh
 - `native-runtime-<sha>`: Linux x86-64 実行バイナリ、静的アセット、seed SQL のアーカイブ (`blog-linux-x86_64.tar.gz`)。
 - `container-image-<sha>`: `docker load` 可能な Docker イメージアーカイブ (`blog-container-image.tar.gz`)。
 - `diagnostics-<sha>`: ビルドログ、C コンパイルログ、差分比較結果 (`reports/differential/summary.json` 等)。
+
+---
+
+## ベンチマーク評価と JIT 比較 (#11〜#20)
+
+Rails、Roundhouse 事前変換コード、Spinel AOT バイナリを同一の SQLite fixture および 1 専有 CPU 環境で公平に対比較するベンチマークスイートを実装しています。
+
+詳細な実行手順・契約仕様は [docs/benchmark.md](docs/benchmark.md)、測定結果・JIT 相互作用分析・未解決ブロッカーの考察は [docs/benchmark-results.md](docs/benchmark-results.md) を参照してください。
+
+### 初回測定結果サマリー (`GET /articles`)
+
+GitHub Actions Hosted Runner（AMD EPYC 7763, 1 専有 vCPU）での実測値：
+
+| ターゲット | 実行スタック | スループット (RPS) | レイテンシ p50 | Peak RSS | 比較倍率 |
+|---|---|---:|---:|---:|:---:|
+| `rails-cruby-off` | Rails 8 + Puma + CRuby (JIT Off) | 270.6 RPS | 14.55 ms | 109.3 MB | 基準 (1.0x) |
+| `rails-cruby-yjit` | Rails 8 + Puma + CRuby (YJIT On) | 447.5 RPS | 8.66 ms | 133.6 MB | YJIT 1.65x |
+| `emit-cruby-off` | Roundhouse 変換 + Puma + CRuby (JIT Off) | 2,268.5 RPS | 1.72 ms | 41.6 MB | **Roundhouse 8.38x** |
+| `emit-cruby-yjit` | Roundhouse 変換 + Puma + CRuby (YJIT On) | 3,021.0 RPS | 1.29 ms | 50.2 MB | **Roundhouse 6.75x** (対 YJIT) |
+| `spinel` | Spinel AOT 単一バイナリ (C-HTTP / DB) | 4,353.4 RPS | 0.89 ms | 12.5 MB | **全体スタック差 16.09x** |
+
+- **Roundhouse 効果**: ルーティング、Rack ミドルウェア、ActiveRecord オブジェクト生成を平坦化することで 6.75x〜8.38x の加速と約 62% の省メモリ化を達成。
+- **JIT 相互作用比 ($I = 0.805$)**: 動的ディスパッチの多い Rails 側で YJIT 効果（+65%）が最大化され、平坦化済みの変換コード（+33%）では劣線形となる関係を特定。
+- **Spinel の位置付け**: 単なる Ruby-to-AOT の言語差ではなく、C 言語イベントループやネイティブ SQLite を含む全体スタック差として 16.09x を実証。
+
+---
 
 ツールチェーンの選定根拠や生成元、変換警告の詳細な記録については [provenance.md](docs/provenance.md) を参照してください。

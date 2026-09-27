@@ -289,6 +289,54 @@ def generate_markdown_report(report_data):
         lines.append(f"| Spinel vs Rails CRuby YJIT | **{sp['ratio_vs_rails_cruby_yjit'] or 'N/A'}** | {sp['note']} |")
         lines.append('')
 
+    # Trial dispositions and execution details
+    if report_data.get('trials'):
+        checks = report_data.get('checks', {})
+        lines.append('## 3. Individual Trial Dispositions and Execution Details\n')
+        lines.append('| Target | Endpoint | Rep | Status | Reason / Details | RPS | p50 (ms) | p95 (ms) | p99 (ms) | Err % | Peak RSS (MB) | CPU % |')
+        lines.append('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
+        for t in report_data['trials']:
+            tgt = t.get('target', '-')
+            ep = t.get('endpoint', '-')
+            rep = t.get('repetition', 1)
+            raw_st = t.get('status', 'unknown')
+            m = t.get('measurement', {})
+            
+            # Determine effective disposition and reason
+            is_elig = ep in checks.get(tgt, {}).get('eligible_endpoints', []) if checks else True
+            reason = t.get('reason')
+            if not is_elig:
+                eff_st = 'excluded'
+                reason = reason or 'Ineligible endpoint (preflight failed)'
+            elif raw_st != 'passed':
+                eff_st = raw_st
+                reason = reason or ('Warmup unstable' if raw_st == 'unstable' else raw_st)
+            elif m.get('client_saturated') or m.get('iterations_dropped', 0) > 0:
+                eff_st = 'excluded'
+                reason = 'Client saturated (dropped iterations)'
+            else:
+                eff_st = 'passed'
+                reason = '-'
+
+            badge = "✅ passed" if eff_st == 'passed' else ("⚠️ unstable" if eff_st == 'unstable' else f"❌ {eff_st}")
+            lat = m.get('latency_ms', {})
+            rps_val = m.get('rps_successful') or m.get('rps')
+            rps = f"{rps_val:.2f}" if rps_val is not None else '-'
+            p50_val = lat.get('p50') or lat.get('med') or m.get('p50_ms')
+            p50 = f"{p50_val:.2f}" if p50_val is not None else '-'
+            p95_val = lat.get('p95') or m.get('p95_ms')
+            p95 = f"{p95_val:.2f}" if p95_val is not None else '-'
+            p99_val = lat.get('p99') or m.get('p99_ms')
+            p99 = f"{p99_val:.2f}" if p99_val is not None else '-'
+            tot = m.get('requests_total') or ((m.get('successful', 0) + m.get('errors', 0)) or 1)
+            err_cnt = m.get('requests_failed') if 'requests_failed' in m else m.get('errors', 0)
+            err_str = f"{(err_cnt / tot) * 100:.2f}%" if tot > 0 and ('errors' in m or 'requests_failed' in m) else '-'
+            telemetry = t.get('telemetry', {}).get('summary', {})
+            rss = f"{telemetry['peak_rss_bytes'] / (1024 * 1024):.2f}" if telemetry.get('peak_rss_bytes') else '-'
+            cpu = f"{telemetry['mean_cpu_pct']:.2f}%" if telemetry.get('mean_cpu_pct') else '-'
+            lines.append(f"| `{tgt}` | `{ep}` | {rep} | {badge} | {reason} | {rps} | {p50} | {p95} | {p99} | {err_str} | {rss} | {cpu} |")
+        lines.append('')
+
     return '\n'.join(lines) + '\n'
 
 def generate_csv_report(report_data):
@@ -349,6 +397,8 @@ def build_report(output_dir, slo_p99_ms=DEFAULT_SLO_P99_MS, slo_error_rate=DEFAU
         'slo_criteria': {'p99_ms': slo_p99_ms, 'error_rate': slo_error_rate},
         'target_aggregates': target_aggregates,
         'pairwise_comparisons': pairwise_comparisons,
+        'trials': trials,
+        'checks': checks,
     }
 
     md_content = generate_markdown_report(report_data)

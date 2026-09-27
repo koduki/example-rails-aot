@@ -106,6 +106,10 @@ class ReportUnitTests(unittest.TestCase):
             md = (root / 'summary.md').read_text(encoding='utf-8')
             self.assertIn('# Benchmark P1 Pairwise Comparison Report', md)
             self.assertIn('`rails-cruby-off`', md)
+            self.assertIn('## 3. Individual Trial Dispositions and Execution Details', md)
+            self.assertIn('Client saturated', md)
+            self.assertIn('trials', data)
+            self.assertEqual(len(data['trials']), 3)
 
 if __name__ == '__main__':
     unittest.main()
