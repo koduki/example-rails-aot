@@ -29,8 +29,8 @@ COPY . /workspace
 
 # Install bundle dependencies, install pinned Roundhouse and Spinel, then transpile and build native binary
 RUN (cd blog && bundle install) && \
-    bash scripts/install-toolchain.sh && \
-    bash scripts/build.sh
+    bash scripts/aot/install-toolchain.sh && \
+    bash scripts/aot/build.sh
 
 # Stage 2: Minimal runtime image without Ruby, Rails, or Spinel
 FROM ubuntu:24.04 AS runtime

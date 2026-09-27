@@ -5,10 +5,9 @@ on:
       - 'bench/**'
       - 'scripts/bench/**'
       - 'tests/bench/**'
-      - 'Dockerfile.bench'
       - '.dockerignore'
-      - 'scripts/transpile.sh'
-      - 'scripts/prepare-assets.sh'
+      - 'scripts/aot/transpile.sh'
+      - 'scripts/aot/prepare-assets.sh'
       - '.github/workflows/benchmark.yml'
   workflow_dispatch:
     inputs:

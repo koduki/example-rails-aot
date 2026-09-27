@@ -37,10 +37,10 @@ jobs:
       - name: Rails baseline tests
         run: |
           mkdir -p reports
-          bash scripts/test-rails.sh 2>&1 | tee reports/rails-tests.log
+          bash scripts/aot/test-rails.sh 2>&1 | tee reports/rails-tests.log
       - name: Archive Rails source
         if: always()
-        run: python3 scripts/archive-source.py
+        run: python3 scripts/aot/archive-source.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -50,15 +50,15 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: .toolchain
-          key: native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('config/toolchain.env', 'scripts/install-toolchain.sh') }}
+          key: native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('config/aot-toolchain.env', 'scripts/aot/install-toolchain.sh') }}
       - name: Install pinned Roundhouse and Spinel
-        run: bash scripts/install-toolchain.sh 2>&1 | tee reports/toolchain.log
+        run: bash scripts/aot/install-toolchain.sh 2>&1 | tee reports/toolchain.log
       - name: Strict transpile and native build
-        run: bash scripts/build.sh
+        run: bash scripts/aot/build.sh
       - name: HTTP and restart persistence smoke test
-        run: bash scripts/smoke-native.sh
+        run: bash scripts/aot/smoke-native.sh
       - name: Differential comparison (Rails vs Spinel AOT)
-        run: bash scripts/run-comparison.sh
+        run: bash scripts/aot/run-comparison.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -82,7 +82,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Test Docker container build, persistence, and load
-        run: bash scripts/test-container.sh
+        run: bash scripts/aot/test-container.sh
       - uses: actions/upload-artifact@v4
         with:
           name: container-image-${{ github.sha }}

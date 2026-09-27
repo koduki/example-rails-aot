@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 ROOT="$PWD"
 mkdir -p reports
 RUN_DIR="$(mktemp -d)"
@@ -25,9 +25,9 @@ start() {
   return 1
 }
 start
-python3 scripts/smoke.py http://127.0.0.1:38000 "$RUN_DIR/storage/development.sqlite3" create | tee reports/native-create.json
+python3 scripts/aot/smoke.py http://127.0.0.1:38000 "$RUN_DIR/storage/development.sqlite3" create | tee reports/native-create.json
 kill "$SERVER_PID"
 wait "$SERVER_PID" || true
 SERVER_PID=''
 start
-python3 scripts/smoke.py http://127.0.0.1:38000 "$RUN_DIR/storage/development.sqlite3" restart | tee reports/native-restart.json
+python3 scripts/aot/smoke.py http://127.0.0.1:38000 "$RUN_DIR/storage/development.sqlite3" restart | tee reports/native-restart.json

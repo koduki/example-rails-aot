@@ -19,18 +19,18 @@ Rails アプリを [Roundhouse](https://github.com/rubys/roundhouse) で変換�
 
 [初回調査レポート](docs/benchmark-results.md)は [Actions 実行 36289166814](https://github.com/koduki/example-rails-aot/actions/runs/36289166814) の**予備測定**です。測定コミットは `e1dd3903de9dfcc8b87a16f222d0ebe43ca8c614`。GitHub hosted runner 上で、同じ3記事・3コメントの SQLite fixture を使い、`GET /articles` を各構成1回、4接続・10秒の closed-loop 方式で測定しました。以下はその試行での観測値です。
 
-| 実行系 | ターゲット ID | JIT | Roundhouse | RPS | p50 | コンテナメモリ最大 | 判定 |
-| --- | --- | --- | :---: | ---: | ---: | ---: | --- |
-| CRuby / Rails | `rails-cruby-off` | Off | なし | 270.60 | 14.55 ms | 109.30 MB | passed |
-| CRuby / 変換後 Ruby | `emit-cruby-off` | Off | あり | 2,268.48 | 1.72 ms | 41.58 MB | passed |
-| CRuby / Rails | `rails-cruby-yjit` | YJIT On | なし | 447.53 | 8.66 ms | 133.60 MB | passed |
-| CRuby / 変換後 Ruby | `emit-cruby-yjit` | YJIT On | あり | 3,021.03 | 1.29 ms | 50.16 MB | passed |
-| JRuby / Rails | `rails-jruby-off` | JRuby JIT Off | なし | — | — | — | 診断対象・初回測定なし |
-| JRuby / 変換後 Ruby | `emit-jruby-off` | JRuby JIT Off | あり | — | — | — | 診断対象・初回測定なし |
-| JRuby / Rails | `rails-jruby` | JRuby JIT On | なし | 26.86 | 121.38 ms | 616.70 MB | passed |
-| JRuby / 変換後 Ruby | `emit-jruby` | JRuby JIT On | あり | 1,258.74 | 2.48 ms | 424.90 MB | **unstable** |
-| Spinel AOT | `spinel` | 対象外（AOT） | あり | 4,353.36 | 0.89 ms | 12.54 MB | passed |
-| Spinel / 未変換 Rails | — | 対象外 | なし | — | — | — | ビルド経路なし |
+| 実行系 | ターゲット ID | JIT | Roundhouse | RPS | p50 | p95 | コンテナメモリ最大 | 判定 |
+| --- | --- | --- | :---: | ---: | ---: | ---: | ---: | --- |
+| CRuby / Rails | `rails-cruby-off` | Off | なし | 270.60 | 14.55 ms | 19.16 ms | 109.30 MB | passed |
+| CRuby / 変換後 Ruby | `emit-cruby-off` | Off | あり | 2,268.48 | 1.72 ms | 2.54 ms | 41.58 MB | passed |
+| CRuby / Rails | `rails-cruby-yjit` | YJIT On | なし | 447.53 | 8.66 ms | 13.32 ms | 133.60 MB | passed |
+| CRuby / 変換後 Ruby | `emit-cruby-yjit` | YJIT On | あり | 3,021.03 | 1.29 ms | 1.99 ms | 50.16 MB | passed |
+| JRuby / Rails | `rails-jruby-off` | JRuby JIT Off | なし | — | — | — | — | 診断対象・初回測定なし |
+| JRuby / 変換後 Ruby | `emit-jruby-off` | JRuby JIT Off | あり | — | — | — | — | 診断対象・初回測定なし |
+| JRuby / Rails | `rails-jruby` | JRuby JIT On | なし | 26.86 | 121.38 ms | 240.92 ms | 616.70 MB | passed |
+| JRuby / 変換後 Ruby | `emit-jruby` | JRuby JIT On | あり | 1,258.74 | 2.48 ms | 6.22 ms | 424.90 MB | **unstable** |
+| Spinel AOT | `spinel` | 対象外（AOT） | あり | 4,353.36 | 0.89 ms | 1.17 ms | 12.54 MB | passed |
+| Spinel / 未変換 Rails | — | 対象外 | なし | — | — | — | — | ビルド経路なし |
 
 この短い試行の処理量比は、Roundhouse／Rails が CRuby JIT Off で **8.38 倍**、YJIT On で **6.75 倍**、Spinel／Rails CRuby JIT Off が **16.09 倍**でした。YJIT On／Off は Rails で **1.65 倍**、変換後 Ruby で **1.33 倍**、両倍率の比は **0.805** です。JRuby JIT Off は初回測定の7構成に含まれず、JIT 有無の効果はこの表から比較できません。Roundhouse 変換後の JRuby JIT On はウォームアップが収束せず、順位付けや倍率比較に使いません。JRuby JIT Off にしても JVM JIT は有効です。メモリはコンテナ使用量でありプロセス RSS ではありません。
 
@@ -60,17 +60,17 @@ docker run -d --name example-rails-aot-demo -p 3000:3000 \
 curl http://127.0.0.1:3000/articles
 ```
 
-作成・再起動後の SQLite 永続化やコンテナの保存・復元は `bash scripts/test-container.sh` で確認できます。ローカルに Ruby 3.4.5、Bundler 2.6.9、Node.js とネイティブビルド依存を用意した場合は、以下で Rails と AOT の差分比較もできます。
+作成・再起動後の SQLite 永続化やコンテナの保存・復元は `bash scripts/aot/test-container.sh` で確認できます。ローカルに Ruby 3.4.5、Bundler 2.6.9、Node.js とネイティブビルド依存を用意した場合は、以下で Rails と AOT の差分比較もできます。
 
 ```bash
-bash scripts/test-rails.sh
-bash scripts/install-toolchain.sh
-bash scripts/build.sh
-bash scripts/smoke-native.sh
-bash scripts/run-comparison.sh
+bash scripts/aot/test-rails.sh
+bash scripts/aot/install-toolchain.sh
+bash scripts/aot/build.sh
+bash scripts/aot/smoke-native.sh
+bash scripts/aot/run-comparison.sh
 ```
 
-差分比較は `reports/differential/` に記録されます。必要な依存パッケージと実行順は [AOT Actions](.github/workflows/aot.yml)、ツールの固定版は [`config/toolchain.env`](config/toolchain.env) を参照してください。
+差分比較は `reports/differential/` に記録されます。必要な依存パッケージと実行順は [AOT Actions](.github/workflows/aot.yml)、ツールの固定版は [`config/aot-toolchain.env`](config/aot-toolchain.env) を参照してください。
 
 ### 2. 予備ベンチマークを再実行する
 

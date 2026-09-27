@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 ROOT="$PWD"
 
 REPORT_DIR="$ROOT/reports/differential"
@@ -36,7 +36,7 @@ mkdir -p "$RUN_DIR/aot_run/storage"
 # Prepare runtime packages
 if ! test -f "$ROOT/artifacts/blog-linux-x86_64.tar.gz"; then
   echo "[DIFF] Packaging native runtime..."
-  bash scripts/build.sh
+  bash scripts/aot/build.sh
 fi
 
 tar -xzf "$ROOT/artifacts/blog-linux-x86_64.tar.gz" -C "$RUN_DIR/aot_run"
@@ -105,7 +105,7 @@ wait_healthy "http://127.0.0.1:$RAILS_PORT" "$RAILS_PID" "$REPORT_DIR/rails-serv
 wait_healthy "http://127.0.0.1:$AOT_PORT" "$AOT_PID" "$REPORT_DIR/aot-server.log"
 
 echo "[DIFF] Running differential comparison suite..."
-python3 "$ROOT/scripts/compare.py" \
+python3 "$ROOT/scripts/aot/compare.py" \
   "http://127.0.0.1:$RAILS_PORT" \
   "http://127.0.0.1:$AOT_PORT" \
   "$RUN_DIR/rails_storage/development.sqlite3" \

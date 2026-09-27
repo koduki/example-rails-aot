@@ -2,7 +2,7 @@
 # Shell wrapper to run benchmark tests or CLI inside a Linux container.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMMAND="${1:-tests}"
 shift || true
 

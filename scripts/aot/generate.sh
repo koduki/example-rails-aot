@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")/.."
-source config/toolchain.env
+cd "$(dirname "$0")/../.."
+source config/aot-toolchain.env
 test ! -e blog || { echo 'blog/ exists; generate in a fresh checkout to avoid overwriting source' >&2; exit 1; }
 test "$(ruby -e 'print RUBY_VERSION')" = "$RUBY_VERSION"
 gem install bundler -v "$BUNDLER_VERSION" --no-document

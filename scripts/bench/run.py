@@ -255,7 +255,7 @@ def build(names, output):
         pinned[key+'_IMAGE'] = digests[0]
     save(output/'base-images.json',pinned)
     for stage in dict.fromkeys(TARGETS['targets'][t]['image'] for t in names):
-        args = ['docker','build','--progress=plain','-f','Dockerfile.bench','--target',stage,'-t','rails-aot-bench:'+stage]
+        args = ['docker','build','--progress=plain','-f','bench/Dockerfile','--target',stage,'-t','rails-aot-bench:'+stage]
         for key,value in pinned.items():
             args += ['--build-arg',key+'='+value]
         command(args+['.'],timeout=3600,log=output/(stage+'-build.log'))

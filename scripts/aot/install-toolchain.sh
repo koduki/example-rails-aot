@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")/.."
-source config/toolchain.env
+cd "$(dirname "$0")/../.."
+source config/aot-toolchain.env
 ROOT="$PWD"
 PREFIX="$ROOT/.toolchain"
 mkdir -p .cache/downloads "$PREFIX/bin"

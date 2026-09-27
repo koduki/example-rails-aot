@@ -19,11 +19,11 @@ The wrapper removes newly generated credentials, fixes the Rails dependency to e
 
 ## Native tools
 
-Roundhouse v2026.9.18 and Spinel 2026.09.12 are the pairing documented in [Roundhouse RELEASES.md](https://github.com/rubys/roundhouse/blob/v2026.9.18/RELEASES.md). Release archives are checked against the SHA-256 values in `config/toolchain.env`. This pins the native tools; OS packages are resolved from Ubuntu 24.04 repositories, so the build is reproducible at the source/version level, not promised byte-for-byte.
+Roundhouse v2026.9.18 and Spinel 2026.09.12 are the pairing documented in [Roundhouse RELEASES.md](https://github.com/rubys/roundhouse/blob/v2026.9.18/RELEASES.md). Release archives are checked against the SHA-256 values in `config/aot-toolchain.env`. This pins the native tools; OS packages are resolved from Ubuntu 24.04 repositories, so the build is reproducible at the source/version level, not promised byte-for-byte.
 
 ## Assets
 
-The checked-in Rails bundle builds Tailwind CSS and provides Turbo/Stimulus. `scripts/prepare-assets.sh` stages those files and application JavaScript. Roundhouse's documented `ROUNDHOUSE_ASSETS_DIR` hook includes them in the emitted project. No generated Ruby is patched by hand.
+The checked-in Rails bundle builds Tailwind CSS and provides Turbo/Stimulus. `scripts/aot/prepare-assets.sh` stages those files and application JavaScript. Roundhouse's documented `ROUNDHOUSE_ASSETS_DIR` hook includes them in the emitted project. No generated Ruby is patched by hand.
 
 ## Validation
 

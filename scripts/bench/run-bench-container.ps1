@@ -7,7 +7,7 @@ param (
 )
 
 $ErrorActionPreference = "Stop"
-$RepoRoot = Split-Path -Parent $PSScriptRoot
+$RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 if ($Command -eq "tests") {
     Write-Host "Running tests inside Linux container (python:3.12-slim)..."

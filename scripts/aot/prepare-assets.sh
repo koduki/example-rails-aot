@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 ROOT="$PWD"
 APP="${BENCH_APP_DIR:-$ROOT/blog}"
 ASSETS="${BENCH_ASSETS_DIR:-$ROOT/.cache/static-assets}"

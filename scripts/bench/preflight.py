@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
-spec = importlib.util.spec_from_file_location('legacy_comparison', ROOT / 'scripts/compare.py')
+spec = importlib.util.spec_from_file_location('legacy_comparison', ROOT / 'scripts/aot/compare.py')
 legacy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(legacy)
 HttpClient = legacy.HttpClient
