@@ -94,7 +94,16 @@ def instrument(output, target):
       return
     end
 '''
-        path.write_text(replace_once(before.decode(), anchor, probe + anchor + branch))
+        rewritten = replace_once(before.decode(), anchor, probe + anchor + branch)
+        # Tep omits its default HTML Content-Type on bodyless redirects.
+        # Rails sends text/html for the same redirect status and Location.
+        location = '    res.headers["Location"] = controller.location unless controller.location.nil?'
+        fixed = location + '''
+    if controller.status >= 300 && controller.status < 400 && !controller.location.nil?
+      res.headers["Content-Type"] = "text/html; charset=utf-8"
+    end'''
+        rewritten = replace_once(rewritten, location, fixed)
+        path.write_text(rewritten)
         changes['main.rb'] = {'before': hashlib.sha256(before).hexdigest(),
                               'after': hashlib.sha256(path.read_bytes()).hexdigest()}
     (output / 'benchmark-emission.json').write_text(json.dumps({

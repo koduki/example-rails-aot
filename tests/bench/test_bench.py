@@ -42,6 +42,8 @@ class BenchmarkTests(unittest.TestCase):
              'body':'{"created_at":"2025-01-01T00:00:00Z"}'}
         b = dict(a,body='{"created_at":"2026-01-01T00:00:00Z"}')
         self.assertNotEqual(preflight.canonical(a),preflight.canonical(b))
+        self.assertEqual(preflight.timestamp('2026-09-27 00:33:58 UTC'),
+                         preflight.timestamp('2026-09-27T00:33:58Z'))
 
     def test_database_corruption_is_rejected(self):
         with tempfile.TemporaryDirectory() as d:

@@ -20,7 +20,9 @@ PRAGMAS = {'journal_mode': 'wal', 'synchronous': '1', 'foreign_keys': '1',
            'busy_timeout': '5000', 'cache_size': '-65536', 'mmap_size': '268435456'}
 
 def timestamp(value):
-    parsed = dt.datetime.fromisoformat(value.replace('Z', '+00:00'))
+    # JRuby's JDBC adapter writes `YYYY-MM-DD HH:MM:SS UTC` while CRuby's
+    # adapter writes an offset or `Z`. Both denote the same UTC instant.
+    parsed = dt.datetime.fromisoformat(value.replace(' UTC', '+00:00').replace('Z', '+00:00'))
     return parsed.replace(tzinfo=parsed.tzinfo or dt.timezone.utc).astimezone(dt.timezone.utc).isoformat()
 
 class DOM(html.parser.HTMLParser):
