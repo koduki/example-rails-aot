@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for smoke profile and preflight reuse."""
 import json
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -10,8 +11,49 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/bench'))
 import run
+from prepare import prepare
+from preflight import snapshot
 
 class SmokeProfileTests(unittest.TestCase):
+    def test_crud_database_checks_detect_real_writes_and_leaks(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'fixture.sqlite3'
+            prepare(path, count=100)
+            original = snapshot(path)
+            initial_sequence = run.article_sequence(path)
+            with sqlite3.connect(path) as db:
+                db.execute('UPDATE articles SET title=?, body=? WHERE id=1',
+                           ('Article 1 (iteration 0)',
+                            'Updated body for article 1 at iteration 0. Preserves bounded storage.'))
+            changed = snapshot(path)
+            measurement = {'iterations_completed': 1,
+                           'operations': {'total': 1, 'successful': 1, 'writes': 1}}
+            self.assertEqual(run.verify_crud_state(original, changed, initial_sequence,
+                             run.article_sequence(path), measurement, 'mix', 100)['updated_articles'], 1)
+            with sqlite3.connect(path) as db:
+                db.execute('UPDATE articles SET body=? WHERE id=1', ('unexpected',))
+            with self.assertRaisesRegex(ValueError, 'not persisted'):
+                run.verify_crud_state(original, snapshot(path), initial_sequence,
+                                      run.article_sequence(path), measurement, 'mix', 100)
+
+            with sqlite3.connect(path) as db:
+                db.execute('INSERT INTO articles (title,body,created_at,updated_at) VALUES (?,?,?,?)',
+                           ('temp', 'body', '2025-01-01', '2025-01-01'))
+                created_id = db.execute('SELECT last_insert_rowid()').fetchone()[0]
+                db.execute('DELETE FROM articles WHERE id=?', (created_id,))
+            self.assertEqual(run.verify_crud_state(snapshot(path), snapshot(path),
+                             initial_sequence, run.article_sequence(path), measurement,
+                             'create_delete', 100)['created_and_deleted'], 1)
+            with self.assertRaisesRegex(ValueError, 'sequence'):
+                run.verify_crud_state(snapshot(path), snapshot(path), initial_sequence,
+                                      initial_sequence, measurement, 'create_delete', 100)
+
+    def test_verification_profiles_are_functional_smokes(self):
+        for profile in ('crud.yml', 'crud-create-delete.yml'):
+            p = run.config(ROOT / 'bench/profiles' / profile)
+            self.assertTrue(p['verification_only'])
+            self.assertFalse(p['allow_unstable'])
+
     def test_crud_gate_selects_only_workload_operations_and_fails_closed(self):
         checks = {'rails': {'cases': {
             'create': {'status': 'passed'}, 'delete': {'status': 'passed'},

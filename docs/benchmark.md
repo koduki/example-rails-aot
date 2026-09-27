@@ -200,8 +200,24 @@ python3 scripts/bench/run.py run --profile bench/profiles/crud.yml \
 
 On pull requests the benchmark workflow runs both short CRUD scenarios after
 the read smoke trial (2 operations/s for read/update, 1 operation/s for
-create/delete). These low rates keep the slowest Rails/JRuby baseline within
-the test's timeout; a trial with zero writes or dropped operations is rejected.
-They check correctness and the runner path; the hosted
-runner's single short trial does not establish a capacity ratio. Repeat the
-workload with controlled arrival rates on a dedicated host for that claim.
+create/delete). These profiles set `verification_only: true`: they run a fixed
+minimum warmup and mark successful trials `verified`, without claiming that
+five-second windows with only a few requests establish latency convergence.
+The runner rejects failed operations, dropped iterations, and client saturation.
+It also checks the SQLite state after each timed trial: updates must contain
+the values sent by k6, while create/delete must leave no new articles or
+comments and must advance the article sequence by the number of completed
+operations. A redirect alone does not certify persistence. CI fails if any
+target is not `verified`.
+
+The 2026-09-27 PR run at [Actions run 36307291456](https://github.com/koduki/example-rails-aot/actions/runs/36307291456)
+finished with 7 `passed` read/update trials and 4 `passed` plus 3 `unstable`
+create/delete trials, despite zero HTTP failures or dropped iterations. Its
+five-second warmup windows contained roughly five operations, so their p95
+fluctuation did not support a convergence claim. Those historical results are
+not a seven-target comparable create/delete measurement. This PR CI contract
+instead verifies functionality and persisted state; `verified` trials remain
+excluded from the statistical report. For latency comparisons, copy a CRUD
+profile, remove `verification_only`, use longer windows, warmup and repeated
+measurement periods, and reject `unstable` trials on a dedicated host. A fixed
+offered rate still does not establish maximum capacity or a JIT speedup ratio.

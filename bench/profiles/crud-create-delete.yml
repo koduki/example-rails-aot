@@ -35,5 +35,6 @@
   "request_timeout": 5,
   "ready_timeout": 120,
   "total_timeout": 1800,
-  "allow_unstable": true
+  "verification_only": true,
+  "allow_unstable": false
 }

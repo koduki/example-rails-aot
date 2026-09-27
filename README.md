@@ -34,12 +34,12 @@ Rails アプリを [Roundhouse](https://github.com/rubys/roundhouse) で変換�
 
 この短い試行の処理量比は、Roundhouse／Rails が CRuby JIT Off で **8.38 倍**、YJIT On で **6.75 倍**、Spinel／Rails CRuby JIT Off が **16.09 倍**でした。YJIT On／Off は Rails で **1.65 倍**、変換後 Ruby で **1.33 倍**、両倍率の比は **0.805** です。JRuby JIT Off は初回測定の7構成に含まれず、JIT 有無の効果はこの表から比較できません。Roundhouse 変換後の JRuby JIT On はウォームアップが収束せず、順位付けや倍率比較に使いません。JRuby JIT Off にしても JVM JIT は有効です。メモリはコンテナ使用量でありプロセス RSS ではありません。
 
-事前比較では全9構成の5種類の読み取り経路が適格でした。一方、無効な書き込みの HTML 表示、JSON バリデーションエラー、不正 CSRF トークンの拒否には差が残るため、**CRUD の性能測定は遮断**しています。上記の倍率は最大処理容量や JIT の因果的な寄与を示しません。専用 GCE ホストでの反復測定、open-arrival 負荷での容量探索は未実施です。条件、p95/p99、CPU、除外理由、次の検証項目は[調査レポート](docs/benchmark-results.md)に記載しています。
+初回の事前比較では全9構成の5種類の読み取り経路が適格でした。その後、ベンチマーク専用コピーに限って Rails の CSRF 検証を無効化し、正常系の更新および作成・削除を別シナリオで検証できるようにしました。[CRUD 検証手順](docs/benchmark.md#benchmark-only-crud-scope)を参照してください。無効な書き込みの HTML 表示、JSON バリデーションエラー、不正 CSRF トークンの拒否には差が残り、アプリ全体の同等性は未達です。上記の予備測定の倍率は最大処理容量や JIT の因果的な寄与を示しません。専用 GCE ホストでの反復測定、open-arrival 負荷での容量探索は未実施です。条件、p95/p99、CPU、除外理由、次の検証項目は[調査レポート](docs/benchmark-results.md)に記載しています。
 
 ### 結果の採用条件
 
 1. `preflight/preflight.json` で**そのターゲット・経路**が `eligible_endpoints` に含まれること。読み取りが通っても書き込みの適格性は得られません。
-2. `trials/per-run.json` の試行状態が `passed` であること。`unstable`、`excluded`、`failed`、`not_run` を性能倍率に混ぜません。
+2. `trials/per-run.json` の試行状態が `passed` であること。機能確認のみの `verified`、未収束の `unstable`、`excluded`、`failed`、`not_run` を性能倍率に混ぜません。
 3. 条件が揃った試行の `summary.md` と生データを併せて読むこと。固定 offered RPS の測定値から最大処理容量の倍率は算出しません。
 
 ## 人間による再現実験
@@ -94,6 +94,19 @@ python3 scripts/bench/run.py report --output bench-results/measurement-local-01
 ```
 
 `--output` には**毎回新しいディレクトリ名**を指定します。標準の smoke profile は主7構成を測定します。JRuby JIT Off の診断2構成も検証する場合は、[ターゲット一覧](bench/targets.yml)の ID を `--targets` に指定してください。事前検証の `preflight-local-01/preflight/preflight.json` で対象経路の適格性を確認してから、測定結果の `summary.md`、`summary.csv`、`trials/per-run.json`、各試行の `warmup.json` と `telemetry.json` を読みます。失敗や未収束の試行を倍率に混ぜないでください。
+
+正常系 CRUD の機能と測定経路は同じ事前検証を使って確認できます。`crud.yml` は読み取り・更新、`crud-create-delete.yml` は作成・削除です。各試行の `database_check` が `passed` で、状態が `verified` なら HTTP と書き込み後の SQLite 状態が一致しています。これらの短時間プロファイルは性能比較のサンプルには含めません。
+
+```bash
+python3 scripts/bench/run.py run --profile bench/profiles/crud.yml \
+  --app-cpus "$APP_CPUS" --load-cpus "$LOAD_CPUS" \
+  --preflight-file bench-results/preflight-local-01/preflight/preflight.json \
+  --output bench-results/crud-local-01
+python3 scripts/bench/run.py run --profile bench/profiles/crud-create-delete.yml \
+  --app-cpus "$APP_CPUS" --load-cpus "$LOAD_CPUS" \
+  --preflight-file bench-results/preflight-local-01/preflight/preflight.json \
+  --output bench-results/create-delete-local-01
+```
 
 上記は**現行コードの再測定**です。表の数値そのものを追試する場合は、次のように測定コミットを別の作業ツリーに展開し、そこで手順2を実行します。レポートに記載した profile・fixture・CPU 配置・測定条件を使用してください。
 

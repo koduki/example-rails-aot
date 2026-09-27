@@ -14,5 +14,6 @@
   "window_seconds": 5, "stable_windows": 3, "max_cv": 0.25, "max_drift": 0.25,
   "measurement_seconds": 15, "connections": 4, "request_timeout": 5,
   "ready_timeout": 120, "total_timeout": 1800,
-  "allow_unstable": true
+  "verification_only": true,
+  "allow_unstable": false
 }
