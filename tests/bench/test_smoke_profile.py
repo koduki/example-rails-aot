@@ -84,6 +84,18 @@ class SmokeProfileTests(unittest.TestCase):
         scheduled_targets = {entry['target'] for entry in sched}
         self.assertEqual(scheduled_targets, set(p['targets']))
 
+    def test_actions_jruby_comparison_requires_converged_repetitions(self):
+        p = run.config(ROOT / 'bench/profiles/ci-jruby-convergence.yml')
+        self.assertEqual(set(p['targets']), {
+            'rails-jruby-off', 'rails-jruby', 'emit-jruby-off', 'emit-jruby'})
+        self.assertEqual(p['repetitions'], 3)
+        self.assertEqual(p['endpoints'], ['/articles'])
+        self.assertFalse(p['allow_unstable'])
+        self.assertGreaterEqual(p['warmup_max_seconds'], 600)
+        self.assertGreaterEqual(p['total_timeout'], len(run.schedule(p)) *
+                                (p['ready_timeout'] + p['warmup_max_seconds'] +
+                                 p['measurement_seconds']))
+
     def test_preflight_file_reuse_in_main(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

@@ -207,8 +207,9 @@ def capture(base_url, database, target):
     # This is a separate capability check; a write gap does not turn a GET into a match.
     response = client.request('POST', '/articles', {'article[title]': 'Rejected CSRF',
                'article[body]': 'This request must not persist.', 'authenticity_token': 'invalid'})
+    csrf_write_persisted = any(r['title'] == 'Rejected CSRF' for r in snapshot(database)['articles'])
     result['cases']['csrf_invalid'] = {'status': 'passed' if response['status'] == 422 and
-        not any(r['title'] == 'Rejected CSRF' for r in snapshot(database)['articles']) else 'failed',
+        not csrf_write_persisted else 'failed', 'write_persisted': csrf_write_persisted,
         'raw': response, 'reason': 'Invalid CSRF must be rejected without a write'}
     return result
 
@@ -241,6 +242,11 @@ def compare(reference, candidate):
         actual = candidate['cases'].get(name)
         if expected['status'] != 'passed':
             checks[name] = {'status': 'excluded', 'reason': 'Reference did not pass its own contract'}
+            if name == 'csrf_invalid':
+                # Preserve what each server actually did even when the
+                # benchmark-only reference deliberately disables protection.
+                checks[name].update(observed_http_status=(actual or {}).get('raw', {}).get('status'),
+                                    observed_write_persisted=(actual or {}).get('write_persisted'))
         elif not actual or actual['status'] != 'passed':
             checks[name] = {'status': 'failed', 'reason': (actual or {}).get('reason', 'Missing case')}
         elif any(expected.get(k) != actual.get(k) for k in ('canonical', 'canonical_db')):

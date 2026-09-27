@@ -189,6 +189,9 @@ checks the successful operations used by the selected
 scenario: `update` for `mix`/`update`, `create` plus `delete` for
 `create_delete`. A missing or failed required case blocks the run. The `read`
 scenario also requires the selected GET endpoint to pass preflight.
+The preflight artifact and Actions summary show each target's observed
+invalid-token HTTP status and whether a write persisted. An `excluded` CSRF
+case is an explicit security parity gap, even when valid CRUD is `verified`.
 
 Run the preflight against freshly built images before using the CRUD profile.
 Keep `preflight.json` and its adjacent `preflight-manifest.json` together.
@@ -213,6 +216,16 @@ the values sent by k6, while create/delete must leave no new articles or
 comments and must advance the article sequence by the number of completed
 operations. A redirect alone does not certify persistence. CI fails if any
 target is not `verified`.
+
+PR Actions also runs `ci-jruby-convergence.yml` for the four JRuby Rails / emitted
+and JRuby JIT on / off combinations. It uses one read endpoint, three rotated
+repetitions, a 60–600 second warmup, and a strict convergence gate. An
+`unstable` trial fails this step; it cannot contribute to the pairwise report.
+The worst configured warmup plus measurement time is 126 minutes for 12 trials,
+plus startup and reporting. These closed-loop results are hosted-runner pilot
+observations; passing convergence does not establish maximum capacity, a
+guaranteed JRuby compiler phase, or a causal JIT speedup. Read the measured
+`warmup.json`, runtime probe, and trial status before interpreting ratios.
 
 The 2026-09-27 PR run at [Actions run 36307291456](https://github.com/koduki/example-rails-aot/actions/runs/36307291456)
 finished with 7 `passed` read/update trials and 4 `passed` plus 3 `unstable`

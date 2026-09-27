@@ -53,6 +53,7 @@ jobs:
           python3 -m unittest discover -s tests/bench -v
           python3 scripts/bench/run.py run --profile bench/profiles/smoke.yml --dry-run > benchmark-plan-smoke.json
           python3 scripts/bench/run.py run --profile bench/profiles/quick.yml --dry-run > benchmark-plan-quick.json
+          python3 scripts/bench/run.py run --profile bench/profiles/ci-jruby-convergence.yml --dry-run > benchmark-plan-ci-jruby-convergence.json
           python3 scripts/bench/run.py run --profile bench/profiles/diagnostic.yml --dry-run > benchmark-plan-diagnostic.json
           python3 scripts/bench/run.py run --profile bench/profiles/full.yml --dry-run > benchmark-plan-full.json
           python3 scripts/bench/run.py run --profile bench/profiles/crud.yml --dry-run > benchmark-plan-crud.json
@@ -118,6 +119,14 @@ jobs:
             --preflight-file bench-results/preflight/preflight.json \
             --output bench-results/crud-create-delete
 
+      - name: Measure converged JRuby 2x2 pilot on PR
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 scripts/bench/run.py run \
+            --profile bench/profiles/ci-jruby-convergence.yml \
+            --preflight-file bench-results/preflight/preflight.json \
+            --output bench-results/jruby-convergence
+
       - name: Publish Step Summary report
         if: always()
         run: |
@@ -126,6 +135,9 @@ jobs:
           fi
           if [ -f bench-results/measurement/diagnostics.md ]; then
             cat bench-results/measurement/diagnostics.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f bench-results/jruby-convergence/summary.md ]; then
+            cat bench-results/jruby-convergence/summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
@@ -139,6 +151,15 @@ jobs:
                   print(f"Database and HTTP verified: {data.get('verified_smoke_trials', 0)}")
                   if data.get('invalid_trials'):
                       print(f"Failed or incomplete: {data['invalid_trials']}")
+          checks = Path('bench-results/preflight/preflight.json')
+          if checks.exists():
+              print('\n### CSRF scope (separate from successful CRUD)')
+              print('Benchmark Rails disables CSRF verification. Invalid-token rejection is not equivalent or eligible for CRUD performance claims.')
+              print('| Target | Preflight | HTTP | Write persisted |')
+              print('| --- | --- | --- | --- |')
+              for target, result in sorted(json.loads(checks.read_text()).items()):
+                  case = result.get('cases', {}).get('csrf_invalid', {})
+                  print(f"| `{target}` | {case.get('status', 'missing')} | {case.get('observed_http_status', '-')} | {case.get('observed_write_persisted', '-')} |")
           PY
 
       - name: Upload benchmark artifacts
