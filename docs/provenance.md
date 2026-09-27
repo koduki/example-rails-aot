@@ -46,3 +46,31 @@ Roundhouse's analyzer reports 0 parse errors, 0 errors, 0 warnings and 0 survey 
 The code is emitted in strict mode without survey/stub flags; strict success is not proof of full semantic equivalence. Preserve these warnings and cover the JSON cases explicitly in #5/#6 before declaring parity. No application feature has been deleted to hide these warnings.
 
 Spinel also reports two upstream RBS boxed-array warnings (`Attached.@variations`, `UserAgent.@tokens`). They do not prevent this build or the exercised operations; warnings remain in the build log. They are not evidence that all framework paths are validated. Rails/AOT differential testing, Cable behavior and runtime-image distribution remain in #5–#9.
+
+## Appendix: Roundhouse architecture (v2026.9.18)
+
+この Appendix は本リポジトリで固定した [Roundhouse v2026.9.18](https://github.com/rubys/roundhouse/tree/v2026.9.18) を対象にする。上流の [analyze](https://github.com/rubys/roundhouse/blob/v2026.9.18/docs/pipeline/analyze.md)、[lower](https://github.com/rubys/roundhouse/blob/v2026.9.18/docs/pipeline/lower.md)、[emit](https://github.com/rubys/roundhouse/blob/v2026.9.18/docs/pipeline/emit.md)、[runtime](https://github.com/rubys/roundhouse/blob/v2026.9.18/docs/pipeline/runtime.md) と [Spinel 手順](https://github.com/rubys/roundhouse/blob/v2026.9.18/docs/guide/spinel.md) をもとに、今回の比較に関わる部分を整理したもの。上流の新しい main ブランチの構成や性能値を、この固定版の測定結果と混同しない。
+
+```mermaid
+flowchart TD
+    A["Rails ソース: Ruby / ERB / schema / routes"] --> B["Ingest: AST と IR"]
+    B --> C["Analyze: 型と副作用"]
+    C --> D["Lower: Rails 固有処理を明示化"]
+    D --> E{"Emit"}
+    E --> F["Ruby / JRuby 用 Ruby プロジェクト"]
+    E --> G["Spinel 用 spin プロジェクト"]
+    G --> H["Spinel: C 生成とネイティブビルド"]
+```
+
+| 段階 | このアプリで扱うもの | 意味 |
+| --- | --- | --- |
+| Ingest | Ruby、ERB、schema、routes、seeds | Rails のソースを、後続の解析が扱える IR に取り込む。ここで元アプリを起動する必要はない。 |
+| Analyze | カラム型、関連、コントローラから view への値、DB 読み書きなど | Rails の規約を手掛かりに式の型と副作用を推論する。メソッドの戻り値と引数について全体の情報を反復して収束させる。解析診断は生成可能範囲を知るための信号となる。 |
+| Lower | validation、association、query、route、controller action、view | Rails 固有の DSL や暗黙の処理を明示的なクラス・関数・処理本体に変換する。例えば `before_action` の対象処理を action に展開し、route を dispatch の形にする。各ターゲットで同じ Rails DSL を解釈し直さない設計。 |
+| Emit | 共通化された IR とターゲット用ランタイム | `ruby`、`jruby`、`spinel` を指定して、それぞれ独立したプロジェクトを生成する。対象の言語処理系と実行環境の差を引き受ける。 |
+
+生成物には、Roundhouse が Ruby で定義した Active Record・Action Controller・Action View 相当の**共通フレームワークランタイム**と、DB 接続・HTTP・WebSocket などを担う**ターゲット別の手書きランタイム**が組み合わされる。これは元の Rails gem をリクエストごとにそのまま動かす構成とは異なる。Ruby/JRuby ターゲットは変換後の Ruby プロジェクトをそれぞれの処理系で実行する。Spinel ターゲットは同系統の Ruby 形状を `spin.toml` 付きのプロジェクトとして出力し、別ツールである Spinel の `spin build` が C を経由してネイティブ実行ファイルを作る。Spinel 側の HTTP・DB 実装差も結果に含まれる。[上流のランタイム説明](https://github.com/rubys/roundhouse/blob/v2026.9.18/docs/pipeline/runtime.md)と[Spinel 出力説明](https://github.com/rubys/roundhouse/blob/v2026.9.18/docs/guide/spinel.md)を参照。
+
+本リポジトリでは [`scripts/transpile.sh`](../scripts/transpile.sh) が `roundhouse check --continue` を記録してから、survey/stub なしでターゲット別の出力を作る。`ruby` / `jruby` / `spinel` の出力には静的アセットを付け、ベンチマークでは [`scripts/bench/emit.py`](../scripts/bench/emit.py) が SQLite pragma、隠しフィールド、計測対象外の runtime probe に対する差分を明示的に記録する。Spinel のバイナリ化は [`scripts/build.sh`](../scripts/build.sh) で行う。解析の成功だけで全経路の同等性は証明できない。現行の `lower_residue` 警告と書き込み時の差はこの文書と [測定レポート](benchmark-results.md) に記録し、HTTP/DB の preflight を別途適用する。
+
+Roundhouse 上流は性能改善の機序を「リクエストごとに変わらない Rails の判断を変換時に済ませ、動的な処理のみを残す」と説明している（[上流 README](https://github.com/rubys/roundhouse/blob/v2026.9.18/README.md)）。本リポジトリの予備測定だけでは、その内部要因や JIT への寄与を独立に特定できない。CRuby/JRuby の同一処理系内での Rails 対変換後コード比較と、Spinel の**実行スタック全体**の比較を分けて解釈する。

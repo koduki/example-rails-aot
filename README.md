@@ -19,22 +19,28 @@ Rails アプリを [Roundhouse](https://github.com/rubys/roundhouse) で変換�
 
 [初回調査レポート](docs/benchmark-results.md)は [Actions 実行 36289166814](https://github.com/koduki/example-rails-aot/actions/runs/36289166814) の**予備測定**です。測定コミットは `e1dd3903de9dfcc8b87a16f222d0ebe43ca8c614`。GitHub hosted runner 上で、同じ3記事・3コメントの SQLite fixture を使い、`GET /articles` を各構成1回、4接続・10秒の closed-loop 方式で測定しました。以下はその試行での観測値です。
 
-| 実行系 | JIT | Roundhouse | RPS | p50 | コンテナメモリ最大 | 判定 |
-| --- | --- | :---: | ---: | ---: | ---: | --- |
-| CRuby / Rails | Off | なし | 270.60 | 14.55 ms | 109.30 MB | passed |
-| CRuby / 変換後 Ruby | Off | あり | 2,268.48 | 1.72 ms | 41.58 MB | passed |
-| CRuby / Rails | YJIT On | なし | 447.53 | 8.66 ms | 133.60 MB | passed |
-| CRuby / 変換後 Ruby | YJIT On | あり | 3,021.03 | 1.29 ms | 50.16 MB | passed |
-| JRuby / Rails | JRuby JIT Off | なし | — | — | — | 診断対象・初回測定なし |
-| JRuby / 変換後 Ruby | JRuby JIT Off | あり | — | — | — | 診断対象・初回測定なし |
-| JRuby / Rails | JRuby JIT On | なし | 26.86 | 121.38 ms | 616.70 MB | passed |
-| JRuby / 変換後 Ruby | JRuby JIT On | あり | 1,258.74 | 2.48 ms | 424.90 MB | **unstable** |
-| Spinel AOT | 対象外（AOT） | あり | 4,353.36 | 0.89 ms | 12.54 MB | passed |
-| Spinel / 未変換 Rails | 対象外 | なし | — | — | — | ビルド経路なし |
+| 実行系 | ターゲット ID | JIT | Roundhouse | RPS | p50 | コンテナメモリ最大 | 判定 |
+| --- | --- | --- | :---: | ---: | ---: | ---: | --- |
+| CRuby / Rails | `rails-cruby-off` | Off | なし | 270.60 | 14.55 ms | 109.30 MB | passed |
+| CRuby / 変換後 Ruby | `emit-cruby-off` | Off | あり | 2,268.48 | 1.72 ms | 41.58 MB | passed |
+| CRuby / Rails | `rails-cruby-yjit` | YJIT On | なし | 447.53 | 8.66 ms | 133.60 MB | passed |
+| CRuby / 変換後 Ruby | `emit-cruby-yjit` | YJIT On | あり | 3,021.03 | 1.29 ms | 50.16 MB | passed |
+| JRuby / Rails | `rails-jruby-off` | JRuby JIT Off | なし | — | — | — | 診断対象・初回測定なし |
+| JRuby / 変換後 Ruby | `emit-jruby-off` | JRuby JIT Off | あり | — | — | — | 診断対象・初回測定なし |
+| JRuby / Rails | `rails-jruby` | JRuby JIT On | なし | 26.86 | 121.38 ms | 616.70 MB | passed |
+| JRuby / 変換後 Ruby | `emit-jruby` | JRuby JIT On | あり | 1,258.74 | 2.48 ms | 424.90 MB | **unstable** |
+| Spinel AOT | `spinel` | 対象外（AOT） | あり | 4,353.36 | 0.89 ms | 12.54 MB | passed |
+| Spinel / 未変換 Rails | — | 対象外 | なし | — | — | — | ビルド経路なし |
 
 この短い試行の処理量比は、Roundhouse／Rails が CRuby JIT Off で **8.38 倍**、YJIT On で **6.75 倍**、Spinel／Rails CRuby JIT Off が **16.09 倍**でした。YJIT On／Off は Rails で **1.65 倍**、変換後 Ruby で **1.33 倍**、両倍率の比は **0.805** です。JRuby JIT Off は初回測定の7構成に含まれず、JIT 有無の効果はこの表から比較できません。Roundhouse 変換後の JRuby JIT On はウォームアップが収束せず、順位付けや倍率比較に使いません。JRuby JIT Off にしても JVM JIT は有効です。メモリはコンテナ使用量でありプロセス RSS ではありません。
 
 事前比較では全9構成の5種類の読み取り経路が適格でした。一方、無効な書き込みの HTML 表示、JSON バリデーションエラー、不正 CSRF トークンの拒否には差が残るため、**CRUD の性能測定は遮断**しています。上記の倍率は最大処理容量や JIT の因果的な寄与を示しません。専用 GCE ホストでの反復測定、open-arrival 負荷での容量探索は未実施です。条件、p95/p99、CPU、除外理由、次の検証項目は[調査レポート](docs/benchmark-results.md)に記載しています。
+
+### 結果の採用条件
+
+1. `preflight/preflight.json` で**そのターゲット・経路**が `eligible_endpoints` に含まれること。読み取りが通っても書き込みの適格性は得られません。
+2. `trials/per-run.json` の試行状態が `passed` であること。`unstable`、`excluded`、`failed`、`not_run` を性能倍率に混ぜません。
+3. 条件が揃った試行の `summary.md` と生データを併せて読むこと。固定 offered RPS の測定値から最大処理容量の倍率は算出しません。
 
 ## 人間による再現実験
 
@@ -89,4 +95,16 @@ python3 scripts/bench/run.py report --output bench-results/measurement-local-01
 
 `--output` には**毎回新しいディレクトリ名**を指定します。標準の smoke profile は主7構成を測定します。JRuby JIT Off の診断2構成も検証する場合は、[ターゲット一覧](bench/targets.yml)の ID を `--targets` に指定してください。事前検証の `preflight-local-01/preflight/preflight.json` で対象経路の適格性を確認してから、測定結果の `summary.md`、`summary.csv`、`trials/per-run.json`、各試行の `warmup.json` と `telemetry.json` を読みます。失敗や未収束の試行を倍率に混ぜないでください。
 
-上記は**現行コードの再測定**です。表の数値そのものを追試する場合は、記載した測定コミットを別の作業ツリーにチェックアウトし、レポートに記載した profile・fixture・CPU 配置・測定条件を使用してください。hosted runner の物理環境を完全には再現できないため、数値の一致は保証されません。より長い実験の設定、k6 による open-arrival 測定、GCE 移行時の注意点は[ベンチマーク手順](docs/benchmark.md)と[`bench/README.md`](bench/README.md)にあります。
+上記は**現行コードの再測定**です。表の数値そのものを追試する場合は、次のように測定コミットを別の作業ツリーに展開し、そこで手順2を実行します。レポートに記載した profile・fixture・CPU 配置・測定条件を使用してください。
+
+```bash
+git fetch origin e1dd3903de9dfcc8b87a16f222d0ebe43ca8c614
+git worktree add --detach ../example-rails-aot-pilot e1dd3903de9dfcc8b87a16f222d0ebe43ca8c614
+cd ../example-rails-aot-pilot
+```
+
+hosted runner の物理環境を完全には再現できないため、数値の一致は保証されません。より長い実験の設定、k6 による open-arrival 測定、GCE 移行時の注意点は[ベンチマーク手順](docs/benchmark.md)と[`bench/README.md`](bench/README.md)にあります。Roundhouse の処理の仕組みと、本リポジトリの測定で変わる範囲は[アーキテクチャ Appendix](docs/provenance.md#appendix-roundhouse-architecture-v2026918)を参照してください。
+
+## ライセンス
+
+このリポジトリの独自のコードと文書は [Apache License 2.0](LICENSE) で公開します。[同梱の Roundhouse 由来スクリプト](scripts/vendor/create-blog)は[別途 MIT License](scripts/vendor/LICENSE-MIT) です。Roundhouse、Spinel、Rails や生成物に含まれる第三者のソフトウェアには各自のライセンスが適用されます。
