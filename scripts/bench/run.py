@@ -407,7 +407,8 @@ def main():
                     report(output)
                 except Exception:
                     pass
-                if any(r['status'] not in ('passed','excluded') for r in rows):
+                allowed_statuses = ('passed', 'excluded', 'unstable') if p.get('allow_unstable') else ('passed', 'excluded')
+                if any(r['status'] not in allowed_statuses for r in rows):
                     return 1
             if any(not set(p['endpoints']).issubset(checks[n]['eligible_endpoints']) for n in p['targets']):
                 return 1
