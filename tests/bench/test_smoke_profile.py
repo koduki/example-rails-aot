@@ -53,6 +53,7 @@ class SmokeProfileTests(unittest.TestCase):
             p = run.config(ROOT / 'bench/profiles' / profile)
             self.assertTrue(p['verification_only'])
             self.assertFalse(p['allow_unstable'])
+            self.assertEqual(set(p['targets']), set(run.TARGETS['targets']))
 
     def test_crud_gate_selects_only_workload_operations_and_fails_closed(self):
         checks = {'rails': {'cases': {

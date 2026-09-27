@@ -200,7 +200,7 @@ python3 scripts/bench/run.py run --profile bench/profiles/crud.yml \
 
 On pull requests the benchmark workflow runs both short CRUD scenarios after
 the read smoke trial (2 operations/s for read/update, 1 operation/s for
-create/delete). These profiles set `verification_only: true`: they run a fixed
+create/delete), across all nine runtime/JIT configurations. These profiles set `verification_only: true`: they run a fixed
 minimum warmup and mark successful trials `verified`, without claiming that
 five-second windows with only a few requests establish latency convergence.
 The runner rejects failed operations, dropped iterations, and client saturation.

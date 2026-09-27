@@ -127,6 +127,19 @@ jobs:
           if [ -f bench-results/measurement/diagnostics.md ]; then
             cat bench-results/measurement/diagnostics.md >> "$GITHUB_STEP_SUMMARY"
           fi
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          for scenario in ('crud', 'crud-create-delete'):
+              path = Path('bench-results') / scenario / 'report.json'
+              if path.exists():
+                  data = json.loads(path.read_text())
+                  print(f'\n### {scenario}: functional smoke only')
+                  print(f"Trial statuses: {data.get('trial_status_counts', {})}")
+                  print(f"Database and HTTP verified: {data.get('verified_smoke_trials', 0)}")
+                  if data.get('invalid_trials'):
+                      print(f"Failed or incomplete: {data['invalid_trials']}")
+          PY
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v4

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "description": "Benchmark-only successful operations: 90/10 read/update, Rails CSRF verifier disabled to match emitted targets; invalid input and CSRF rejection are outside this workload",
-  "targets": ["rails-cruby-off", "rails-cruby-yjit", "emit-cruby-off", "emit-cruby-yjit", "rails-jruby", "emit-jruby", "spinel"],
+  "targets": ["rails-cruby-off", "rails-cruby-yjit", "emit-cruby-off", "emit-cruby-yjit", "rails-jruby", "rails-jruby-off", "emit-jruby", "emit-jruby-off", "spinel"],
   "endpoints": ["/articles"],
   "driver": "k6",
   "k6_script": "bench/k6/crud.js",
