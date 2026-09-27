@@ -23,7 +23,9 @@ is unsupported for this application; no synthetic zero value is reported.
 `blog/` stays at its existing Rails version. `prepare_app.py` builds a
 disposable copy using a shared Rails **8.0.5.1** dependency set for CRuby
 **3.4.5** and JRuby **10.0.7.0** (Ruby 3.4 compatibility), with the JDBC
-SQLite adapter 80.0.pre1. The Ruby dependencies and their checksums are in
+SQLite adapter 80.0.pre1. The adapter core constrains Active Record to the 8.0
+series, which is why the 8.1 application is copied and adapted rather than mixed
+with the other targets. The Ruby dependencies and their checksums are in
 `Gemfile.lock` and `emitted.Gemfile.lock`; the Roundhouse and Spinel versions
 remain pinned in the repository toolchain. Container base tags live in
 `toolchain.env`; each build records the resolved immutable base image digests,

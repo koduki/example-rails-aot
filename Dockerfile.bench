@@ -14,9 +14,9 @@ RUN SECRET_KEY_BASE=benchmark-build-only bundle exec rails assets:precompile
 FROM ruby-base AS emit
 WORKDIR /src
 RUN bash scripts/install-toolchain.sh
-RUN bash scripts/transpile.sh ruby out/bench-app out/bench-ruby && python3 scripts/bench/emit.py out/bench-ruby ruby
-RUN bash scripts/transpile.sh jruby out/bench-app out/bench-jruby && python3 scripts/bench/emit.py out/bench-jruby jruby
-RUN bash scripts/transpile.sh spinel out/bench-app out/bench-spinel && python3 scripts/bench/emit.py out/bench-spinel spinel
+RUN SECRET_KEY_BASE=benchmark-build-only bash scripts/transpile.sh ruby out/bench-app out/bench-ruby && python3 scripts/bench/emit.py out/bench-ruby ruby
+RUN SECRET_KEY_BASE=benchmark-build-only bash scripts/transpile.sh jruby out/bench-app out/bench-jruby && python3 scripts/bench/emit.py out/bench-jruby jruby
+RUN SECRET_KEY_BASE=benchmark-build-only bash scripts/transpile.sh spinel out/bench-app out/bench-spinel && python3 scripts/bench/emit.py out/bench-spinel spinel
 WORKDIR /src/out/bench-spinel
 RUN PATH=/src/.toolchain/bin:$PATH CC=clang spin build
 
