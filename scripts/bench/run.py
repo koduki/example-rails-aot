@@ -124,7 +124,10 @@ class Server:
                 '--memory', str(self.profile['memory_mb'])+'m', '--memory-swap', str(self.profile['memory_mb'])+'m',
                 '-p', '127.0.0.1::3000', '--mount', 'type=bind,src='+str(self.database.parent.resolve())+',dst=/data',
                 '-e', 'BENCH_JIT='+t['jit'], '-e', 'RAILS_MAX_THREADS='+str(self.profile['threads']),
-                '-e', 'SPINEL_WORKERS='+str(self.profile['spinel_workers']), tag(self.target)]
+                '-e', 'SPINEL_WORKERS='+str(self.profile['spinel_workers'])]
+        if self.profile.get('diagnostics'):
+            args += ['-e', 'BENCH_DIAGNOSTICS=1']
+        args += [tag(self.target)]
         save(self.directory / 'launch.json', {'argv': args, 'fixture': self.fixture})
         try:
             start = time.monotonic()
@@ -188,6 +191,16 @@ class Server:
         save(self.directory/filename,observed)
         return observed
 
+    def get_diagnostics(self):
+        try:
+            client = HttpClient(self.url)
+            res = client.request('GET', '/__bench/diagnostics')
+            if res.get('status') == 200 and res.get('body'):
+                return json.loads(res['body'])
+            return {'available': False, 'status': res.get('status')}
+        except Exception as e:
+            return {'available': False, 'reason': str(e)}
+
 def report(output):
     """Summarize the correctness gate, trial disposition, and generate P1 pairwise report."""
     root = Path(output)
@@ -212,6 +225,12 @@ def report(output):
     try:
         import report as p1_report
         p1_report.build_report(root)
+    except Exception:
+        pass
+
+    try:
+        import diagnostic as p1_diag
+        p1_diag.build_diagnostic_report(root)
     except Exception:
         pass
 
@@ -323,6 +342,7 @@ def trials(p, cpus, output, checks):
             directory = output / f'{index:04d}-{trial["target"]}'
             try:
                 with Server(trial['target'], directory, p, cpus) as server:
+                    diag_start = server.get_diagnostics() if p.get('diagnostics') else None
                     windows = []; elapsed = 0.0; ready = False
                     while elapsed < p['warmup_max_seconds'] and time.monotonic() < deadline:
                         window = sample(server, trial['endpoint'], p['window_seconds'], p, cpus, directory)
@@ -331,7 +351,8 @@ def trials(p, cpus, output, checks):
                         if elapsed >= p['warmup_min_seconds'] and stable(windows, p):
                             ready = True; break
                     row['warmup_seconds'] = elapsed
-                    if not ready:
+                    diag_warmup = server.get_diagnostics() if p.get('diagnostics') else None
+                    if not ready and not p.get('allow_unstable'):
                         row.update(status='unstable', reason='No stable window within budget')
                     elif deadline - time.monotonic() < p['measurement_seconds']:
                         row.update(status='not_run', reason='Insufficient remaining measurement budget')
@@ -346,8 +367,15 @@ def trials(p, cpus, output, checks):
                         measured = sample(server, trial['endpoint'], p['measurement_seconds'], p, cpus, directory)
                         telemetry = collector.stop() if collector else {}
                         save(directory / 'telemetry.json', telemetry)
+                        diag_end = server.get_diagnostics() if p.get('diagnostics') else None
+                        diag_data = {'start': diag_start, 'warmup': diag_warmup, 'end': diag_end} if p.get('diagnostics') else None
+                        if diag_data:
+                            save(directory / 'diagnostics.json', diag_data)
                         has_errors = measured.get('errors') or (measured.get('requests_failed', 0) > 0 and measured.get('requests_successful', 0) == 0)
-                        row.update(status='failed' if has_errors else 'passed', measurement=measured, telemetry=telemetry)
+                        final_status = 'failed' if has_errors else ('unstable' if not ready else 'passed')
+                        row.update(status=final_status, measurement=measured, telemetry=telemetry)
+                        if diag_data:
+                            row.update(diagnostics=diag_data)
                     save(directory / 'trial.json', row)
             except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
                 row.update(status='failed', reason=str(e))

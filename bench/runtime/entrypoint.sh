@@ -14,7 +14,20 @@ if [[ "$BENCH_RUNTIME" = spinel ]]; then
 elif [[ "$BENCH_RUNTIME" = jruby ]]; then
   case "$BENCH_JIT" in jit) mode=JIT;; off) mode=OFF;; *) exit 2;; esac
   export JRUBY_OPTS="-Xcompile.mode=$mode -J-Xms256m -J-Xmx1024m"
+  if [[ "${BENCH_DIAGNOSTICS:-0}" = "1" || "${BENCH_DIAGNOSTICS:-}" = "true" ]]; then
+    export JRUBY_OPTS="$JRUBY_OPTS -Xjit.logging=true -J-Xlog:gc -J-XX:+PrintCompilation"
+  fi
 else
-  case "$BENCH_JIT" in on) export RUBYOPT=--yjit;; off) export RUBYOPT=--disable-yjit;; *) exit 2;; esac
+  case "$BENCH_JIT" in
+    on)
+      if [[ "${BENCH_DIAGNOSTICS:-0}" = "1" || "${BENCH_DIAGNOSTICS:-}" = "true" ]]; then
+        export RUBYOPT="--yjit --yjit-stats"
+      else
+        export RUBYOPT="--yjit"
+      fi
+      ;;
+    off) export RUBYOPT=--disable-yjit;;
+    *) exit 2;;
+  esac
 fi
 exec bundle exec puma -C /bench/runtime/puma.rb /bench/runtime/config.ru
