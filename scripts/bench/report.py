@@ -415,6 +415,13 @@ def build_report(output_dir, slo_p99_ms=DEFAULT_SLO_P99_MS, slo_error_rate=DEFAU
     except Exception:
         pass
 
+    # Generate auxiliary evaluation report (startup, build, 4-core feasibility)
+    try:
+        import auxiliary as p2_aux
+        p2_aux.build_auxiliary_report(run_dir=root, output_path=root)
+    except Exception:
+        pass
+
     return report_data
 
 if __name__ == '__main__':

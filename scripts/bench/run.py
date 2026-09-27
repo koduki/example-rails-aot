@@ -298,8 +298,11 @@ def sample(server, endpoint, duration, p, cpus, directory=None):
         except Exception:
             pass
 
+        script_rel = p.get('k6_script', 'bench/k6/read.js')
+        script_path = ROOT / script_rel
+
         if has_local_k6:
-            k6_args = ['k6', 'run', str(ROOT / 'bench/k6/read.js'),
+            k6_args = ['k6', 'run', str(script_path),
                        '-e', f'TARGET_URL={server.url}{endpoint}',
                        '-e', f'DURATION={int(duration)}s',
                        '-e', f'RATE={rate}',
@@ -311,13 +314,13 @@ def sample(server, endpoint, duration, p, cpus, directory=None):
                 'docker', 'run', '--rm',
                 '--cpuset-cpus', client_cpus,
                 '--network', 'host',
-                '-v', f'{ROOT.resolve()}/bench/k6/read.js:/read.js:ro',
+                '-v', f'{script_path.resolve()}:/test_script.js:ro',
                 '-v', f'{output_dir.resolve()}:/output',
                 '-e', f'TARGET_URL={server.url}{endpoint}',
                 '-e', f'DURATION={int(duration)}s',
                 '-e', f'RATE={rate}',
                 '-e', f'TIMEOUT={int(p["request_timeout"])}s',
-                'grafana/k6:latest', 'run', '/read.js',
+                'grafana/k6:latest', 'run', '/test_script.js',
                 '--summary-export', '/output/k6-summary.json'
             ]
             command(k6_args, timeout=duration + p['request_timeout'] + 60)
