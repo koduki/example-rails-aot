@@ -502,7 +502,8 @@ def trials(p, cpus, output, checks):
                         has_errors = (succ_reqs == 0) or (err_rate > p.get('max_error_rate', 0.05)) or (
                             operations.get('failed', 0) > 0) or measured.get('client_saturated', False) or (
                             measured.get('iterations_dropped', 0) > 0)
-                        if p.get('k6_script') == 'bench/k6/crud.js':
+                        if is_crud:
+                            has_errors = has_errors or failed_reqs > 0
                             scenario = p.get('crud_scenario', 'mix')
                             if scenario != 'read':
                                 has_errors = has_errors or operations.get('writes', 0) == 0
