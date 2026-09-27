@@ -1,88 +1,22 @@
 ---
 name: pr-train-runner
-description: >-
-  Automates the chained execution of multi-step GitHub issues by creating feature branches,
-  safely committing changes on Windows, pushing, opening PRs, monitoring CI workflows,
-  merging when green, and advancing to the next dependent task without repetitive manual confirmation.
+description: Execute dependent GitHub issues and PRs, check CI on the current PR HEAD, and use a Windows PowerShell helper for commits and explicitly authorized merges.
 ---
 
-# PR Train Runner
+# PR train runner
 
-Use this skill when managing or executing multi-issue epics, roadmap milestones, or chained Pull Requests where tasks depend on each other and require continuous implementation, CI verification, and merging into `main`.
+Use for a user-authorized sequence of dependent issues. Continue implementation and local verification through the agreed scope; create a PR for review. A plan or a request to proceed does not by itself authorize merging. Merge only when the user has authorized it in the conversation.
 
-For detailed background, architectural concepts, and the origin story from `example-rails-aot` Issues #11–#21, see [Why and What Document](./references/why-and-what.md).
+1. Check the current branch and worktree, fetch the latest base, then create a dedicated branch. Avoid discarding other work.
+2. Implement one reviewable change at a time; run relevant tests and inspect the diff.
+3. Create a PR with a clear summary, test results, and issue linkage when applicable.
+4. Watch the checks attached to the current PR HEAD. A cancelled older push run can be superseded by a newer successful run for the same workflow and check; a latest cancelled, failed, pending, or missing check blocks merge. Recheck HEAD, draft status, and merge status before acting.
+5. Once merging is explicitly authorized, use the helper on a system with PowerShell and `gh`:
 
----
+```powershell
+pwsh -File .agents/skills/pr-train-runner/scripts/pr_train.ps1 -Action watch-and-merge -PrNumber 123 -AllowMerge
+```
 
-## Autonomous Operation Agreement
+The helper requires `-AllowMerge`, waits up to 30 minutes for checks, and requires a clean merge state. The flag is a guardrail, not a replacement for user authorization. It syncs local `main` with `git pull --ff-only` after merging. If CI or the HEAD changes, fix and recheck rather than bypassing the gate.
 
-When the user agrees to a multi-stage plan or instructs "進めて" / "マージまでやって" / "最後まで実施して":
-1. **Do not stop to ask trivial confirmation** between PR creation, CI monitoring, and merging.
-2. Only interrupt the user if:
-   - A critical CI test fails and requires fundamental design changes.
-   - An ambiguous product/architecture decision is encountered.
-   - All tasks in the epic/parent issue are completed.
-
----
-
-## Execution Protocol
-
-### Step 1: Branch Preparation & Implementation
-1. Ensure the local branch is clean and up to date with `main`:
-   ```powershell
-   git checkout main
-   git pull
-   ```
-2. Create and switch to a descriptive feature branch:
-   ```powershell
-   git checkout -b feat/<issue-id>-<short-description>
-   ```
-3. Implement the required code, unit tests, and documentation.
-4. Run all relevant local tests before committing:
-   ```powershell
-   python -m unittest discover -s tests/bench -v
-   ```
-
-### Step 2: Safe Commit on Windows
-Avoid inline multiline strings in PowerShell. Use the provided helper or write to a temporary file:
-- Using helper script:
-  ```powershell
-  pwsh -File .agents/skills/pr-train-runner/scripts/pr_train.ps1 -Action commit -Message "feat(scope): concise title (#issue_id)`n`nDetailed body."
-  ```
-- Or manual file commit:
-  ```powershell
-  # Write message to commit_msg.txt
-  git commit -F commit_msg.txt
-  del commit_msg.txt
-  ```
-
-### Step 3: Push & Create Pull Request
-1. Push branch to remote:
-   ```powershell
-   git push origin feat/<issue-id>-<short-description>
-   ```
-2. Create the Pull Request with explicit issue linkage (`Closes #<id>`):
-   ```powershell
-   gh pr create --title "feat(scope): concise title (#id)" --body "Closes #id`n`n### Summary`n..."
-   ```
-
-### Step 4: Intelligent CI Monitoring & Auto-Merge
-1. Identify the PR number from output or `gh pr view`.
-2. Monitor workflows and merge automatically upon success:
-   ```powershell
-   pwsh -File .agents/skills/pr-train-runner/scripts/pr_train.ps1 -Action "watch-and-merge" -PrNumber <PR_NUMBER>
-   ```
-3. If monitoring manually:
-   - Run `gh run watch <RUN_ID>` as a background task.
-   - Distinguish between superseded/cancelled push runs and active pull_request runs.
-   - Once all active checks pass, execute:
-     ```powershell
-     gh pr merge <PR_NUMBER> --merge --delete-branch
-     git checkout main
-     git pull
-     ```
-
-### Step 5: Advance to the Next Milestone
-1. Verify that the linked sub-issue was closed automatically by the PR merge (`gh issue view <id> --json state`).
-2. Update the parent issue progress checkbox if applicable (`gh issue comment <parent-id>`).
-3. Immediately proceed to the next dependent sub-issue without asking for user permission, until the epic reaches its final destination.
+For multiline Windows commits, use `-Action commit -Message "title`n`nbody"`; this writes an OS temporary file and calls `git commit -F`. Run `-Action sync-main` to update local main without merging. See [rationale](references/why-and-what.md).

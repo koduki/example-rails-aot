@@ -4,8 +4,8 @@
 .DESCRIPTION
     Provides reliable, idempotent helpers to:
     - Safely commit multi-line messages without quoting issues (git commit -F).
-    - Watch PR checks, filtering out cancelled/superseded workflow runs.
-    - Merge PRs with --delete-branch and synchronize local main branch.
+    - Inspect current PR checks and fail closed on missing, pending, or failed checks.
+    - Merge explicitly authorized PRs and synchronize local main branch.
 #>
 
 [CmdletBinding()]
@@ -18,7 +18,9 @@ param(
     [string]$Message,
 
     [Parameter(Mandatory = $false)]
-    [int]$PrNumber
+    [int]$PrNumber,
+
+    [switch]$AllowMerge
 )
 
 Set-StrictMode -Version Latest
@@ -49,50 +51,76 @@ function Invoke-WatchAndMerge {
     if ($TargetPr -le 0) {
         throw "Valid PR number must be specified."
     }
+    if (-not $AllowMerge) {
+        throw "Merge requires explicit -AllowMerge (and the user's authorization)."
+    }
 
-    Write-Host "[PR-Train] Checking active workflow runs for PR #$TargetPr..."
-    $branch = (& gh pr view $TargetPr --json headRefName --jq .headRefName).Trim()
-    Write-Host "[PR-Train] PR branch: $branch"
+    $prInfo = (& gh pr view $TargetPr --json headRefOid,mergeable,mergeStateStatus,state,isDraft) | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or -not $prInfo -or $prInfo.state -ne "OPEN" -or $prInfo.isDraft) {
+        throw "[PR-Train] PR must be open and ready for review."
+    }
+    $head = $prInfo.headRefOid
 
-    # Identify non-cancelled workflow runs triggered by pull_request
-    $runsJson = (& gh run list --branch $branch --event pull_request --json databaseId,status,conclusion,name) | ConvertFrom-Json
-    foreach ($run in $runsJson) {
-        if ($run.status -ne "completed") {
-            Write-Host "[PR-Train] Watching active run $($run.databaseId) ($($run.name))..."
-            & gh run watch $run.databaseId
+    # gh pr checks reports checks associated with the PR, unlike gh run list
+    # filtered by a branch name (which can include runs from older commits).
+    # A cancelled push run may be superseded by a later pull_request check
+    # with the same workflow and check name. Never ignore the latest result.
+    $deadline = (Get-Date).AddMinutes(30)
+    do {
+        $raw = & gh pr checks $TargetPr --json name,workflow,event,startedAt,bucket
+        if (-not $raw) {
+            throw "[PR-Train] No PR checks returned (gh exit: $LASTEXITCODE)."
         }
-    }
+        try {
+            $checks = @(ConvertFrom-Json -InputObject ($raw -join "`n"))
+        }
+        catch {
+            throw "[PR-Train] Could not parse PR checks: $_"
+        }
+        if ($checks.Count -eq 0) {
+            throw "[PR-Train] No checks registered for PR #$TargetPr."
+        }
+        $latest = @($checks | Group-Object workflow,name | ForEach-Object {
+            $_.Group | Sort-Object startedAt, @{ Expression = { if ($_.event -eq 'pull_request') { 1 } else { 0 } } } -Descending | Select-Object -First 1
+        })
+        $blocked = @($latest | Where-Object { $_.bucket -notin @("pass", "skipping", "pending") })
+        if ($blocked.Count -gt 0) {
+            throw "[PR-Train] Failed or cancelled current checks: $($blocked.name -join ', ')"
+        }
+        $pending = @($latest | Where-Object { $_.bucket -eq "pending" })
+        if ($pending.Count -eq 0) { break }
+        if ((Get-Date) -ge $deadline) {
+            throw "[PR-Train] Timed out waiting for PR checks."
+        }
+        Start-Sleep -Seconds 10
+    } while ($true)
 
-    Write-Host "[PR-Train] Verifying PR check conclusion..."
-    $checks = & gh pr checks $TargetPr
-    Write-Host $checks
-
-    $prInfo = (& gh pr view $TargetPr --json mergeable,mergeStateStatus,state) | ConvertFrom-Json
-    if ($prInfo.state -ne "OPEN") {
-        Write-Host "[PR-Train] PR #$TargetPr is already $($prInfo.state)."
-        return
-    }
-
-    if ($prInfo.mergeable -ne "MERGEABLE") {
-        throw "[PR-Train] PR #$TargetPr is not mergeable (state: $($prInfo.mergeable), status: $($prInfo.mergeStateStatus)). Manual intervention required."
+    $prInfo = (& gh pr view $TargetPr --json headRefOid,mergeable,mergeStateStatus,state,isDraft) | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or $prInfo.headRefOid -ne $head -or $prInfo.state -ne "OPEN" -or
+        $prInfo.isDraft -or $prInfo.mergeable -ne "MERGEABLE" -or $prInfo.mergeStateStatus -ne "CLEAN") {
+        throw "[PR-Train] PR HEAD changed or merge gate is not clean. Recheck the latest checks and PR state."
     }
 
     Write-Host "[PR-Train] Merging PR #$TargetPr..."
-    & gh pr merge $TargetPr --merge --delete-branch
+    & gh pr merge $TargetPr --merge --delete-branch --match-head-commit $head
     if ($LASTEXITCODE -ne 0) {
         throw "gh pr merge failed with exit code $LASTEXITCODE"
     }
 
     Write-Host "[PR-Train] Switching to main and pulling latest changes..."
     & git checkout main
-    & git pull
+    if ($LASTEXITCODE -ne 0) { throw "git checkout main failed" }
+    & git pull --ff-only
+    if ($LASTEXITCODE -ne 0) { throw "git pull --ff-only failed" }
     Write-Host "[PR-Train] PR #$TargetPr successfully merged and main synced!"
 }
 
 function Invoke-SyncMain {
     Write-Host "[PR-Train] Syncing local main branch with origin..."
     & git checkout main
-    & git pull
+    if ($LASTEXITCODE -ne 0) { throw "git checkout main failed" }
+    & git pull --ff-only
+    if ($LASTEXITCODE -ne 0) { throw "git pull --ff-only failed" }
 }
 
 switch ($Action) {

@@ -12,7 +12,8 @@ const TARGET_RPS = parseInt(__ENV.TARGET_RPS || '1000', 10);
 const DURATION = __ENV.DURATION || '30s';
 const PRE_ALLOCATED_VUS = parseInt(__ENV.PRE_ALLOCATED_VUS || '50', 10);
 const MAX_VUS = parseInt(__ENV.MAX_VUS || '200', 10);
-const NUM_ENTITIES = parseInt(__ENV.NUM_ENTITIES || '1000', 10);
+// The repository fixture always contains article 1; override for another prepared fixture.
+const ARTICLE_ID = parseInt(__ENV.ARTICLE_ID || '1', 10);
 
 export const options = {
   scenarios: {
@@ -26,30 +27,24 @@ export const options = {
     },
   },
   thresholds: {
-    // Fail if client-side executor saturates and cannot keep up with target arrival rate
+    // Drops can also result from long server latency exhausting the configured VUs.
     'dropped_iterations': ['count==0'],
-    'http_req_failed': ['rate<0.001'], // 99.9% success required
-    'http_req_duration': ['p(95)<100'], // Customizable SLA
+    'http_req_failed': ['rate==0'],
+    'checks': ['rate==1'],
   },
   discardResponseBodies: false,
 };
 
 export default function () {
-  // Deterministic VU-partitioned targeting to prevent artificial DB lock contention
-  const targetId = 1 + ((__VU * 31 + __ITER) % NUM_ENTITIES);
-  const startTime = Date.now();
-
-  const res = http.get(`${TARGET_URL}/articles/${targetId}`, {
+  const res = http.get(`${TARGET_URL.replace(/\/$/, '')}/articles/${ARTICLE_ID}`, {
     headers: { 'Accept': 'text/html' },
     tags: { name: 'GetArticle' },
   });
 
-  const duration = Date.now() - startTime;
-  operationDuration.add(duration);
-  operationCount.add(1);
-
-  check(res, {
+  operationDuration.add(res.timings.duration);
+  const valid = check(res, {
     'status is 200': (r) => r.status === 200,
     'body has content': (r) => r.body && r.body.length > 0,
   });
+  if (valid) operationCount.add(1);
 }
