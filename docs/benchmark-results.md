@@ -223,3 +223,38 @@ Measurement    : 1258.7 RPS (p50:  2.5 ms)
    Roundhouse 側の CSRF トークン検証と JSON エラー形式の修正を完了させた上で、90% 読み取り / 10% 書き込みの現実的トラフィックミックスにおける対比較を実施する。
 4. **大容量データ（1,000 件記事 ＋ ページネーション）での検証**:
    SQLite B-Tree キャッシュとクエリ実行プランが変化した際の、ActiveRecord vs 静的 SQL クエリの差異を検証する。
+
+---
+
+## 9. 補助評価結果（起動遅延・フットプリント・4 コア・CRUD 評価）
+
+Issue [#21](https://github.com/koduki/example-rails-aot/issues/21) に基づき、定常 1 コア読み取りの主比較から独立した補助評価を実施した。
+
+### 9.1 プロセス起動から初回業務応答（First 200 OK）までの所要時間
+
+同一環境（AMD EPYC 7763, 1 CPU）における、コンテナ起動から最初の `GET /articles` が HTTP 200 を返すまでの実測所要時間（`ready_seconds`）：
+
+| ターゲット | 実行ランタイム | JIT モード | 初回業務応答時間 (s) | Spinel 比 | Rails CRuby Off 比 |
+|---|---|:---:|---:|:---:|:---:|
+| `spinel` | Spinel AOT ネイティブバイナリ | AOT | **0.17 秒** | 基準 (1.0x) | **13.5x 高速** |
+| `emit-cruby-off` | Roundhouse 変換 + Puma | JIT Off | **0.70 秒** | 4.1x | **3.3x 高速** |
+| `emit-cruby-yjit` | Roundhouse 変換 + Puma | YJIT On | **0.70 秒** | 4.1x | **3.3x 高速** |
+| `rails-cruby-off` | Rails 8 + Puma | JIT Off | **2.29 秒** | 13.5x | 基準 (1.0x) |
+| `rails-cruby-yjit` | Rails 8 + Puma | YJIT On | **2.87 秒** | 16.9x | 1.25x 遅延 |
+| `emit-jruby` | Roundhouse 変換 + Puma | JIT (HotSpot) | **11.38 秒** | 66.9x | 5.0x 遅延 |
+| `rails-jruby` | Rails 8 + Puma | JIT (HotSpot) | **28.73 秒** | 169.0x | 12.5x 遅延 |
+
+- **ネイティブ AOT の起動優位性**: Spinel は 0.17 秒で初回業務応答を完了。Rails CRuby に対し 13.5 倍、Rails JRuby に対し 169 倍高速であり、FaaS やオートスケーリング環境におけるコールドスタート耐性が極めて高い。
+- **Roundhouse による起動時間短縮**: Rails 起動時の数百に及ぶ gem / ファイルの require や初期化フックが排除されたため、CRuby 上でも 2.29 秒 → 0.70 秒（3.3 倍高速化）へ短縮された。
+
+### 9.2 4 コア条件のプロファイル策定と未実施理由
+
+4 コアでの並列スケーリング評価に向け、`bench/profiles/quick-4core.yml`（4 CPU 専有、4,096 MB メモリ、CRuby 4 スレッド、JRuby 4 スレッド、Spinel 4 ワーカー）を策定した。
+ただし、GitHub Actions hosted runner は全体で 4 vCPU（2 物理コア SMT）しか持たないため、アプリに 4 CPU を割り当てると負荷生成器（k6）と CPU を奪い合い、負荷生成器の飽和（client saturation）を引き起こす。このため、主結果の公平性を担保すべく、**4 コア測定は hosted runner では理由付き未実施（スキップ）とし、将来の GCE 専用 VM（8 vCPU 以上）向け profile として保持** する。
+
+### 9.3 CRUD 混在負荷シナリオ策定 (`bench/k6/crud.js`)
+
+定常読み取りに加え、現実的なトラフィックミックス（90% 読み取り / 10% 更新）をシミュレートする `bench/k6/crud.js` を配備した。
+- **VU 分割による SQLite ロック競合の防止**: 各 VU が `targetId = 1 + ((__VU * 31 + __ITER) % numArticles)` により異なるレコードを更新することで、意図しない DB ロック待ちを回避。
+- **データ無制限増加の抑制**: インプレース更新（PATCH）を中心に設計し、DB サイズの時間経過による肥大化を防止。
+

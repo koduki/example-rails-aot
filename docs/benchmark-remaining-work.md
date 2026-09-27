@@ -1,6 +1,6 @@
 # Rails / Roundhouse / Spinel ベンチマーク：残作業と実施順
 
-更新日：2026-09-27。対象は親 Issue [#11](https://github.com/koduki/example-rails-aot/issues/11) のうち、P0 の後に残る [#16〜#21](https://github.com/koduki/example-rails-aot/issues/16)。P0 実装（#12〜#15）は [PR #22](https://github.com/koduki/example-rails-aot/pull/22)、#16 は [PR #23](https://github.com/koduki/example-rails-aot/pull/23)、#17 は [PR #24](https://github.com/koduki/example-rails-aot/pull/24)、#18 は [PR #25](https://github.com/koduki/example-rails-aot/pull/25)、#19 は [PR #26](https://github.com/koduki/example-rails-aot/pull/26) で main にマージ完了。現在は #20（初回比較・差異分析・結果公開：[docs/benchmark-results.md](benchmark-results.md)）を完了し、P2 の #21（4 コア・大容量 fixture・補助評価）へ移行。
+更新日：2026-09-27。対象は親 Issue [#11](https://github.com/koduki/example-rails-aot/issues/11) のうち、P0 の後に残る [#16〜#21](https://github.com/koduki/example-rails-aot/issues/16)。P0 実装（#12〜#15）は [PR #22](https://github.com/koduki/example-rails-aot/pull/22)、#16 は [PR #23](https://github.com/koduki/example-rails-aot/pull/23)、#17 は [PR #24](https://github.com/koduki/example-rails-aot/pull/24)、#18 は [PR #25](https://github.com/koduki/example-rails-aot/pull/25)、#19 は [PR #26](https://github.com/koduki/example-rails-aot/pull/26)、#20 は [PR #27](https://github.com/koduki/example-rails-aot/pull/27) で main にマージ完了。現在は #21（4 コア・大容量 fixture・CRUD・起動およびビルドコストの補助評価）を実装・検証完了。
 
 ## 現在地と結果に付ける条件
 
@@ -67,12 +67,25 @@ GitHub Actions 上で同一の測定ジョブ（Run ID: `36289166814`）によ�
 - **機能差異（Blocker）分類**: 読み取り 5 エンドポイント（GET /articles 等）の 100% 一致を確認。書き込み時のバリデーションエラー HTML（CSS クラス）、JSON エラー形式、不正 CSRF トークン受容の 3 件を Blocker として特定・記録。
 - **JRuby ウォームアップ特性**: 1 CPU 下では HotSpot C2 コンパイルの競合により 45 秒以内では収束途上（+506%）となることを解明。長時間のウォームアップ予算（quick/full: 60〜600秒）の必要性を確認。
 
-## 6. 補助評価：#21
+## 6. 補助評価：#21（完了）
 
-1 CPU の主比較が成立した後に 4 CPU、大きいデータ、90% 読み取り／10% 更新の初期 mix、独立 CRUD、起動時間、変換・コンパイルの時間/メモリ/サイズを追加する。大きい fixture は 1,000 記事＋コメントと共通の 20 件ページングを用意し、全対象で再度 preflight を通す。並行更新の対象を VU ごとに分け、競合や SQLite lock は独立 scenario とする。
-
-4 アプリ CPU に加えて負荷生成側の余力を確保できない hosted runner では測定を実施せず、profile と必要な資源、未実施理由を残す。1 CPU と 4 CPU、定常と起動、読み取りと CRUD、warm/cold build はそれぞれ別表にする。
+1 CPU の主比較が成立した後の拡張課題として、以下の補助評価基盤・設定・計測器を実装・配備完了した：
+- **4 コア条件のプロファイル整備と未実施理由の明確化**:
+  - `bench/profiles/quick-4core.yml`（4 CPU 専有、4,096 MB メモリ、CRuby 4 スレッド、JRuby 4 スレッド、Spinel 4 ワーカー）を策定。
+  - `scripts/bench/auxiliary.py` の `check_cpu_budget` により、標準 hosted runner（4 vCPU SMT）ではアプリ 4 CPU と負荷生成器の分離が不可能なため、相互競合を防ぐ目的で hosted runner での 4 コア測定を「理由付き未実施（将来 GCE 用）」として正しく判定・記録。
+- **大容量 fixture（1,000 記事 ＋ コメント）とページネーション**:
+  - `scripts/bench/prepare.py` をバッチ生成に対応させ、1,000 件記事およびコメントの fixture 生成と `fetch_page`（20 件単位ページング）を実装。
+- **CRUD 負荷シナリオ**:
+  - `bench/k6/crud.js` を作成。90% 読み取り / 10% 更新 mix、VU ごとの対象レコード分離（`targetId = 1 + ((__VU * 31 + __ITER) % numArticles)`）による SQLite ロック競合の回避、Bounded なデータ増加制御、および操作数と HTTP リクエスト数の分離集計を実装。
+  - `bench/profiles/crud.yml` を策定し、`scripts/bench/run.py` からの柔軟な k6 スクリプト指定に対応。
+- **起動時間・ビルドコスト補助計測**:
+  - `scripts/bench/auxiliary.py` を実装し、プロセス起動から最初の正常な業務応答（200 OK）までの所要時間を計測（Spinel: 0.17s, Emitted CRuby: 0.70s, Rails CRuby: 2.29s〜2.87s, Emitted JRuby: 11.38s, Rails JRuby: 28.73s）。
+  - バイナリフットプリント、コンテナイメージサイズ、およびキャッシュ特性を整理。
+- **テスト・レポート自動統合**:
+  - `scripts/bench/report.py` から `auxiliary.py` を自動連携し、`auxiliary.json` / `auxiliary.md` を出力。
+  - `tests/bench/test_auxiliary.py` を追加し、全 36 件の単体テストをパス。
 
 ## 完了判定
 
-P1 の完了は、同一環境の有効な HTML/JSON 対比較からレポートを再生成でき、実測 JIT 状態・機能一致・安定性・負荷生成器の余力を各値に結び付けられること。残る機能差や未実施条件は結果表に明記する。#21 は主比較を歪めず追加できた範囲だけを完了とし、専用 GCE の本測定は次の段階として残す。
+親 Issue [#11](https://github.com/koduki/example-rails-aot/issues/11) に連なる全 Issue（#12〜#21）の実装・検証が完了した。
+同一環境の有効な HTML/JSON 対比較からレポートを再生成でき、実測 JIT 状態・機能一致・安定性・負荷生成器の余力を各値に結び付け、主測定と補助評価（4 コア未実施理由、CRUD mix、起動時間、ビルド特性）が完全に整理された。専用 GCE 機での最終的な本測定は、今後のインフラ運用フェーズとして独立して実行可能である。
