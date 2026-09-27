@@ -20,9 +20,12 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(prepare.prepare(a), prepare.prepare(b))
             with self.assertRaises(ValueError):
                 prepare.prepare(a)
-            with sqlite3.connect(a) as db:
+            db = sqlite3.connect(a)
+            try:
                 self.assertEqual(db.execute('SELECT count(*) FROM articles').fetchone()[0], 3)
                 self.assertEqual(db.execute('PRAGMA journal_mode').fetchone()[0], 'wal')
+            finally:
+                db.close()
 
     def test_json_fallback_and_wrong_body_are_rejected(self):
         bad = {'status':200, 'content_type':'text/html', 'location':None, 'body':'<h1>Not JSON</h1>'}
@@ -117,7 +120,7 @@ class LifecycleTests(unittest.TestCase):
     def test_cpu_overlap_is_rejected(self):
         from unittest.mock import patch
         p=run.config(ROOT/'bench/profiles/quick.yml')
-        with patch.object(run.os,'sched_getaffinity',return_value={0,1}):
+        with patch.object(run.os,'sched_getaffinity',create=True,return_value={0,1}):
             with self.assertRaises(ValueError): run.allocation(p,'0','0')
             self.assertEqual(run.allocation(p)['client'],[1])
         self.assertEqual(run.cpuset('1,3-5'),{1,3,4,5})

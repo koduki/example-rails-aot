@@ -75,7 +75,7 @@ def schedule(p):
     return result
 
 def allocation(p, app_cpus=None, load_cpus=None):
-    allowed = sorted(os.sched_getaffinity(0))
+    allowed = sorted(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else list(range(os.cpu_count() or 1))
     app = list(map(int, app_cpus.split(','))) if app_cpus else allowed[:p['cpu_count']]
     client = list(map(int, load_cpus.split(','))) if load_cpus else [c for c in allowed if c not in app]
     if len(set(app)) != p['cpu_count'] or not client or set(app) & set(client) or (set(app)|set(client))-set(allowed):
@@ -189,10 +189,11 @@ class Server:
         return observed
 
 def report(output):
-    """Summarize the correctness gate and trial disposition, never rank throughput."""
+    """Summarize the correctness gate, trial disposition, and generate P1 pairwise report."""
     root = Path(output)
-    checks = json.loads((root/'preflight/preflight.json').read_text())
-    eligible = sorted(set.intersection(*(set(v.get('eligible_endpoints',[])) for v in checks.values())))
+    preflight_file = root / 'preflight/preflight.json'
+    checks = json.loads(preflight_file.read_text(encoding='utf-8')) if preflight_file.exists() else {}
+    eligible = sorted(set.intersection(*(set(v.get('eligible_endpoints',[])) for v in checks.values()))) if checks else []
     data = {'purpose':'P0 validity and execution status; not a capacity ranking',
             'eligible_common_reads':eligible,
             'preflight':{name:{'eligible_endpoints':value.get('eligible_endpoints',[]),
@@ -200,13 +201,20 @@ def report(output):
                 'status':value.get('status','checked')} for name,value in checks.items()}}
     trials_file = root/'trials/per-run.json'
     if trials_file.exists():
-        rows = json.loads(trials_file.read_text())
+        rows = json.loads(trials_file.read_text(encoding='utf-8'))
         data['trial_status_counts'] = {s:sum(row['status']==s for row in rows)
                                         for s in sorted({row['status'] for row in rows})}
         data['invalid_trials'] = [dict(target=row['target'],endpoint=row['endpoint'],
             repetition=row['repetition'],status=row['status'],reason=row.get('reason'))
             for row in rows if row['status'] != 'passed']
     save(root/'report.json',data)
+
+    try:
+        import report as p1_report
+        p1_report.build_report(root)
+    except Exception:
+        pass
+
     return data
 
 def build(names, output):
@@ -255,45 +263,95 @@ def preflight(names, output, p, cpus):
         save(output/'preflight.json',comparisons)
     return comparisons
 
-def sample(server, endpoint, duration, p, cpus):
-    args = [sys.executable,str(ROOT/'scripts/bench/driver.py'),server.url+endpoint,
-            '--duration',str(duration),'--connections',str(p['connections']),
-            '--timeout',str(p['request_timeout']),'--cpus',','.join(map(str,cpus['client']))]
-    return json.loads(command(args,timeout=duration+p['request_timeout']+15))
+def sample(server, endpoint, duration, p, cpus, directory=None):
+    if p.get('driver') == 'k6':
+        output_dir = Path(directory) if directory else ROOT / 'bench-results/tmp'
+        output_dir.mkdir(parents=True, exist_ok=True)
+        summary_path = output_dir / 'k6-summary.json'
+        rate = p.get('offered_rps', 50)
+        client_cpus = ','.join(map(str, cpus['client']))
+
+        has_local_k6 = False
+        try:
+            has_local_k6 = subprocess.run(['k6', 'version'], capture_output=True, timeout=2).returncode == 0
+        except Exception:
+            pass
+
+        if has_local_k6:
+            k6_args = ['k6', 'run', str(ROOT / 'bench/k6/read.js'),
+                       '-e', f'TARGET_URL={server.url}{endpoint}',
+                       '-e', f'DURATION={int(duration)}s',
+                       '-e', f'RATE={rate}',
+                       '-e', f'TIMEOUT={int(p["request_timeout"])}s',
+                       '--summary-export', str(summary_path)]
+            command(k6_args, timeout=duration + p['request_timeout'] + 30)
+        else:
+            k6_args = [
+                'docker', 'run', '--rm',
+                '--cpuset-cpus', client_cpus,
+                '--network', 'host',
+                '-v', f'{ROOT.resolve()}/bench/k6/read.js:/read.js:ro',
+                '-v', f'{output_dir.resolve()}:/output',
+                '-e', f'TARGET_URL={server.url}{endpoint}',
+                '-e', f'DURATION={int(duration)}s',
+                '-e', f'RATE={rate}',
+                '-e', f'TIMEOUT={int(p["request_timeout"])}s',
+                'grafana/k6:latest', 'run', '/read.js',
+                '--summary-export', '/output/k6-summary.json'
+            ]
+            command(k6_args, timeout=duration + p['request_timeout'] + 60)
+
+        if summary_path.exists():
+            return json.loads(summary_path.read_text(encoding='utf-8'))
+
+    args = [sys.executable, str(ROOT / 'scripts/bench/driver.py'), server.url + endpoint,
+            '--duration', str(duration), '--connections', str(p['connections']),
+            '--timeout', str(p['request_timeout']), '--cpus', ','.join(map(str, cpus['client']))]
+    return json.loads(command(args, timeout=duration + p['request_timeout'] + 15))
 
 def trials(p, cpus, output, checks):
     result = []
-    deadline = time.monotonic()+p['total_timeout']
-    for index,trial in enumerate(schedule(p)):
+    deadline = time.monotonic() + p['total_timeout']
+    for index, trial in enumerate(schedule(p)):
         row = dict(trial, status='pending')
         result.append(row)
         if trial['endpoint'] not in checks[trial['target']]['eligible_endpoints']:
-            row.update(status='excluded',reason='Endpoint failed preflight')
+            row.update(status='excluded', reason='Endpoint failed preflight')
         elif time.monotonic() >= deadline:
-            row.update(status='not_run',reason='Total time budget exhausted')
+            row.update(status='not_run', reason='Total time budget exhausted')
         else:
             directory = output / f'{index:04d}-{trial["target"]}'
             try:
-                with Server(trial['target'],directory,p,cpus) as server:
+                with Server(trial['target'], directory, p, cpus) as server:
                     windows = []; elapsed = 0.0; ready = False
                     while elapsed < p['warmup_max_seconds'] and time.monotonic() < deadline:
-                        window = sample(server,trial['endpoint'],p['window_seconds'],p,cpus)
+                        window = sample(server, trial['endpoint'], p['window_seconds'], p, cpus, directory)
                         windows.append(window); elapsed += window['elapsed']
-                        save(directory/'warmup.json',windows)
-                        if elapsed >= p['warmup_min_seconds'] and stable(windows,p):
+                        save(directory / 'warmup.json', windows)
+                        if elapsed >= p['warmup_min_seconds'] and stable(windows, p):
                             ready = True; break
                     row['warmup_seconds'] = elapsed
                     if not ready:
-                        row.update(status='unstable',reason='No stable window within budget')
-                    elif deadline-time.monotonic() < p['measurement_seconds']:
-                        row.update(status='not_run',reason='Insufficient remaining measurement budget')
+                        row.update(status='unstable', reason='No stable window within budget')
+                    elif deadline - time.monotonic() < p['measurement_seconds']:
+                        row.update(status='not_run', reason='Insufficient remaining measurement budget')
                     else:
-                        measured = sample(server,trial['endpoint'],p['measurement_seconds'],p,cpus)
-                        row.update(status='failed' if measured['errors'] else 'passed',measurement=measured)
-                    save(directory/'trial.json',row)
-            except (OSError,RuntimeError,ValueError,subprocess.TimeoutExpired) as e:
-                row.update(status='failed',reason=str(e))
-        save(output/'per-run.json',result)
+                        collector = None
+                        try:
+                            import collect
+                            collector = collect.ResourceCollector(server.name, interval=1.0)
+                            collector.start()
+                        except Exception:
+                            pass
+                        measured = sample(server, trial['endpoint'], p['measurement_seconds'], p, cpus, directory)
+                        telemetry = collector.stop() if collector else {}
+                        save(directory / 'telemetry.json', telemetry)
+                        has_errors = measured.get('errors') or (measured.get('requests_failed', 0) > 0 and measured.get('requests_successful', 0) == 0)
+                        row.update(status='failed' if has_errors else 'passed', measurement=measured, telemetry=telemetry)
+                    save(directory / 'trial.json', row)
+            except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
+                row.update(status='failed', reason=str(e))
+        save(output / 'per-run.json', result)
     return result
 
 def main():

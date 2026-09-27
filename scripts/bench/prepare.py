@@ -19,7 +19,8 @@ def prepare(path, count=3):
     if count < 1:
         raise ValueError('count must be positive')
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as db:
+    db = sqlite3.connect(path)
+    try:
         db.executescript(SCHEMA)
         for n in range(1, count + 1):
             stamp = f'2025-01-01 00:00:{n % 60:02d}.000000'
@@ -29,6 +30,8 @@ def prepare(path, count=3):
                        (n, n, f'Comment body {n}', f'Reader {n}', stamp, stamp))
         db.commit()
         db.execute('PRAGMA journal_mode=WAL')
+    finally:
+        db.close()
     return {'sha256': hashlib.sha256(path.read_bytes()).hexdigest(), 'articles': count, 'comments': count}
 
 if __name__ == '__main__':

@@ -89,7 +89,22 @@ emitted hidden-field attributes. Known write differences still include JSON
 validation error shape and CSRF rejection; `preflight.json` reports the exact
 status for each target and case. An endpoint becomes eligible only when its own
 comparison passes. A passing read does not imply full application equivalence.
-Do not compare throughput from failed or excluded cases. The current driver
-is suitable for checking orchestration, stability handling, and target
-configuration; final capacity, latency percentiles, confidence intervals,
-and host-cost interpretation require the P1 load/report implementation.
+Do not compare throughput from failed or excluded cases.
+
+## Load generation, telemetry, and pairwise reports (P1)
+
+P1 provides open-arrival load generation (`bench/k6/read.js`), continuous
+resource telemetry (`scripts/bench/collect.py`), and offline statistical
+pairwise comparison reporting (`scripts/bench/report.py`).
+
+- **k6 Open-Arrival Rate**: Executes `constant-arrival-rate` scenarios against eligible endpoints.
+  Tracks started, completed, successful, and dropped iterations. Trials with `dropped_iterations > 0`
+  or saturated VUs are automatically labeled as `client_saturated` and excluded from valid capacity rankings.
+- **Resource Telemetry**: `collect.py` samples CPU percentage, RSS bytes, and cgroup v2 peak memory / CPU throttling
+  at 1-second intervals during trial execution, verifying client headroom and server constraints.
+- **Pairwise Comparison Report**: `report.py` reconstructs summary metrics without re-running servers, outputting
+  `summary.json`, `summary.csv`, and `summary.md`. Computes Roundhouse speedup ratios ($capacity_{emit} / capacity_{rails}$),
+  YJIT speedup factor ($G = capacity_{ON} / capacity_{OFF}$), the interaction ratio ($G_{emit} / G_{rails}$),
+  JRuby compile-mode speedup, and Spinel whole-system comparison.
+- **Container Execution**: `scripts/run-bench-container.ps1` (PowerShell) and `scripts/run-bench-container.sh` (bash)
+  allow running benchmark tests and CLI inside a Linux container to absorb host OS discrepancies.
