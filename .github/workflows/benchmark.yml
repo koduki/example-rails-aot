@@ -13,14 +13,13 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: 'Benchmark profile (smoke, quick, full, diagnostic)'
+        description: 'Hosted-runner profile (smoke, quick, diagnostic); run full on a dedicated host'
         required: true
         default: 'quick'
         type: choice
         options:
           - quick
           - smoke
-          - full
           - diagnostic
       targets:
         description: 'Comma-separated target list (blank for all profile targets)'
@@ -44,7 +43,7 @@ jobs:
   benchmark:
     name: Benchmark execution and verification
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
 

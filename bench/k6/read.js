@@ -22,6 +22,7 @@ export const options = {
     },
   },
   discardResponseBodies: false,
+  summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
 };
 
 export default function () {
@@ -61,46 +62,52 @@ export default function () {
 export function handleSummary(data) {
   // Extract key summary metrics for portable parsing
   const metrics = data.metrics || {};
-  const duration = metrics.http_req_duration ? metrics.http_req_duration.values : {};
+  const latency = metrics.http_req_duration ? metrics.http_req_duration.values : {};
   const iterations = metrics.iterations ? metrics.iterations.values : {};
   const dropped = metrics.dropped_iterations ? metrics.dropped_iterations.values : { count: 0 };
   const vus = metrics.vus ? metrics.vus.values : {};
   const reqs = metrics.http_reqs ? metrics.http_reqs.values : {};
-  const failed = metrics.http_req_failed ? metrics.http_req_failed.values : {};
-  const checks = metrics.check_failures ? metrics.check_failures.values : { count: 0 };
   const successes = metrics.successful_requests ? metrics.successful_requests.values : { count: 0 };
+  const elapsed = data.state && data.state.testRunDurationMs
+    ? data.state.testRunDurationMs / 1000 : Number.parseInt(duration, 10);
+  const total = reqs.count || 0;
+  const successful = successes.count || 0;
 
   const parsed = {
     driver: 'k6-open-arrival',
     rate_offered: rate,
     target_url: __ENV.TARGET_URL || '',
     duration_configured: duration,
+    elapsed: elapsed,
     vus_max_configured: maxVUs,
     vus_preallocated_configured: preAllocatedVUs,
     vus_peak: vus.max || 0,
     iterations_started: (iterations.count || 0) + (dropped.count || 0),
     iterations_completed: iterations.count || 0,
     iterations_dropped: dropped.count || 0,
-    requests_total: reqs.count || 0,
-    requests_successful: successes.count || 0,
-    requests_failed: (failed.passes || 0) + (checks.count || 0),
+    requests_total: total,
+    requests_successful: successful,
+    requests_failed: Math.max(0, total - successful),
+    errors: Math.max(0, total - successful),
+    rps: successful / elapsed,
+    p95_ms: latency['p(95)'] || 0,
     rps_effective: reqs.rate || 0,
-    rps_successful: (successes.count || 0) / (data.state && data.state.testRunDurationMs ? (data.state.testRunDurationMs / 1000) : 1),
+    rps_successful: successful / elapsed,
     latency_ms: {
-      min: duration.min || 0,
-      avg: duration.avg || 0,
-      med: duration.med || 0,
-      p50: duration.med || 0,
-      p90: duration['p(90)'] || 0,
-      p95: duration['p(95)'] || 0,
-      p99: duration['p(99)'] || 0,
-      max: duration.max || 0,
+      min: latency.min || 0,
+      avg: latency.avg || 0,
+      med: latency.med || 0,
+      p50: latency.med || 0,
+      p90: latency['p(90)'] || 0,
+      p95: latency['p(95)'] || 0,
+      p99: latency['p(99)'] || 0,
+      max: latency.max || 0,
     },
     client_saturated: (dropped.count || 0) > 0 || (vus.max || 0) >= maxVUs,
     raw: data,
   };
 
   return {
-    'summary.json': JSON.stringify(parsed, null, 2),
+    [__ENV.SUMMARY_PATH || 'summary.json']: JSON.stringify(parsed, null, 2),
   };
 }

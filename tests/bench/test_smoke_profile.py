@@ -63,5 +63,23 @@ class SmokeProfileTests(unittest.TestCase):
                 saved_checks = json.loads((root / 'output/preflight/preflight.json').read_text(encoding='utf-8'))
                 self.assertEqual(saved_checks, preflight_data)
 
+    def test_report_failure_marks_run_failed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            check_file = root / 'preflight.json'
+            check_file.write_text(json.dumps({'rails-cruby-off': {
+                'eligible_endpoints': ['/articles'], 'cases': {'/articles': {'status': 'passed'}}
+            }}))
+            args = ['run.py', 'run', '--profile', str(ROOT / 'bench/profiles/smoke.yml'),
+                    '--targets', 'rails-cruby-off', '--preflight-file', str(check_file),
+                    '--output', str(root / 'output'), '--app-cpus', '0', '--load-cpus', '1']
+            rows = [{'target': 'rails-cruby-off', 'endpoint': '/articles', 'repetition': 1,
+                     'status': 'passed', 'measurement': {'rps': 10}}]
+            with patch.object(sys, 'argv', args), patch('run.trials', return_value=rows), \
+                 patch('run.report', side_effect=RuntimeError('report corrupted')):
+                self.assertEqual(run.main(), 1)
+            failure = json.loads((root / 'output/failure.json').read_text())
+            self.assertIn('report corrupted', failure['reason'])
+
 if __name__ == '__main__':
     unittest.main()

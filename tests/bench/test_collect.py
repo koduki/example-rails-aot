@@ -29,9 +29,9 @@ class CollectUnitTests(unittest.TestCase):
     def test_collector_summary_aggregation(self):
         collector = collect.ResourceCollector('test-container', interval=0.01)
         mock_samples = [
-            {'timestamp': 1.0, 'cpu_pct': 10.0, 'rss_bytes': 100 * 1024 * 1024},
-            {'timestamp': 2.0, 'cpu_pct': 20.0, 'rss_bytes': 200 * 1024 * 1024},
-            {'timestamp': 3.0, 'cpu_pct': 30.0, 'rss_bytes': 150 * 1024 * 1024},
+            {'timestamp': 1.0, 'cpu_pct': 10.0, 'container_memory_bytes': 100 * 1024 * 1024},
+            {'timestamp': 2.0, 'cpu_pct': 20.0, 'container_memory_bytes': 200 * 1024 * 1024},
+            {'timestamp': 3.0, 'cpu_pct': 30.0, 'container_memory_bytes': 150 * 1024 * 1024},
         ]
         collector.samples = mock_samples
 
@@ -50,7 +50,8 @@ class CollectUnitTests(unittest.TestCase):
         self.assertEqual(summary['sample_count'], 3)
         self.assertEqual(summary['mean_cpu_pct'], 20.0)
         self.assertEqual(summary['peak_cpu_pct'], 30.0)
-        self.assertEqual(summary['peak_rss_bytes'], 200 * 1024 * 1024)
+        self.assertEqual(summary['peak_container_memory_bytes'], 200 * 1024 * 1024)
+        self.assertIsNone(summary['peak_rss_bytes'])
         self.assertEqual(summary['cgroup_peak_bytes'], 250 * 1024 * 1024)
         self.assertEqual(summary['throttled_periods'], 5)
         self.assertEqual(summary['throttled_time_usec'], 50000)

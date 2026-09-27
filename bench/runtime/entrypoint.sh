@@ -5,7 +5,7 @@ export RAILS_ENV=production RACK_ENV=production
 export BLOG_DB=/data/benchmark.sqlite3
 export SECRET_KEY_BASE=benchmark-only-not-a-deployment-secret-0123456789abcdef
 export RAILS_MAX_THREADS="${RAILS_MAX_THREADS:-3}"
-export WEB_CONCURRENCY=0
+export WEB_CONCURRENCY="${BENCH_PUMA_WORKERS:-0}"
 export BENCH_JIT="${BENCH_JIT:?BENCH_JIT is required}"
 unset RUBYOPT JRUBY_OPTS JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS
 if [[ "$BENCH_RUNTIME" = spinel ]]; then

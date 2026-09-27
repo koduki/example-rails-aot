@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import random
+import shutil
 import signal
 import statistics
 import subprocess
@@ -53,6 +54,14 @@ def config(path):
     if not p['endpoints'] or set(p['endpoints']) - set(READS):
         raise ValueError('Unknown/empty endpoints')
     select(p['targets'])
+    if type(p.get('fixture_articles', 3)) is not int or p.get('fixture_articles', 3) < 3:
+        raise ValueError('fixture_articles must be an integer >= 3 for the preflight paths')
+    if p.get('driver') == 'k6' and (type(p.get('offered_rps')) not in (int, float) or p['offered_rps'] <= 0):
+        raise ValueError('k6 offered_rps must be positive')
+    minimum = len(p['targets']) * len(p['endpoints']) * p['repetitions'] * (
+        p['warmup_min_seconds'] + p['measurement_seconds'])
+    if p['total_timeout'] < minimum:
+        raise ValueError(f'total_timeout {p["total_timeout"]}s cannot fit the minimum {minimum}s of trials')
     return p
 
 def select(names):
@@ -118,7 +127,7 @@ class Server:
         self.info = None
     def __enter__(self):
         self.directory.mkdir(parents=True, exist_ok=False)
-        self.fixture = prepare(self.database)
+        self.fixture = prepare(self.database, count=self.profile.get('fixture_articles', 3))
         t = TARGETS['targets'][self.target]
         target_host = self.profile.get('target_host', '127.0.0.1')
         bind_host = '0.0.0.0' if target_host not in ('127.0.0.1', 'localhost') else '127.0.0.1'
@@ -126,6 +135,7 @@ class Server:
                 '--memory', str(self.profile['memory_mb'])+'m', '--memory-swap', str(self.profile['memory_mb'])+'m',
                 '-p', f'{bind_host}::3000', '--mount', 'type=bind,src='+str(self.database.parent.resolve())+',dst=/data',
                 '-e', 'BENCH_JIT='+t['jit'], '-e', 'RAILS_MAX_THREADS='+str(self.profile['threads']),
+                '-e', 'BENCH_PUMA_WORKERS='+str(self.profile['cpu_count'] if t['runtime'] == 'cruby' and self.profile['cpu_count'] > 1 else 0),
                 '-e', 'SPINEL_WORKERS='+str(self.profile['spinel_workers'])]
         if self.profile.get('diagnostics'):
             args += ['-e', 'BENCH_DIAGNOSTICS=1']
@@ -224,18 +234,8 @@ def report(output):
             for row in rows if row['status'] != 'passed']
     save(root/'report.json',data)
 
-    try:
-        import report as p1_report
-        p1_report.build_report(root)
-    except Exception:
-        pass
-
-    try:
-        import diagnostic as p1_diag
-        p1_diag.build_diagnostic_report(root)
-    except Exception:
-        pass
-
+    import report as p1_report
+    p1_report.build_report(root)
     return data
 
 def build(names, output):
@@ -289,8 +289,17 @@ def sample(server, endpoint, duration, p, cpus, directory=None):
         output_dir = Path(directory) if directory else ROOT / 'bench-results/tmp'
         output_dir.mkdir(parents=True, exist_ok=True)
         summary_path = output_dir / 'k6-summary.json'
+        summary_path.unlink(missing_ok=True)
         rate = p.get('offered_rps', 50)
         client_cpus = ','.join(map(str, cpus['client']))
+        script_rel = p.get('k6_script', 'bench/k6/read.js')
+        is_crud = script_rel == 'bench/k6/crud.js'
+        target_url = server.url if is_crud else server.url + endpoint
+        env_args = ['-e', f'TARGET_URL={target_url}', '-e', f'DURATION={int(duration)}s',
+                    '-e', f'RATE={rate}', '-e', f'TIMEOUT={int(p["request_timeout"])}s']
+        if is_crud:
+            env_args += ['-e', f'NUM_ARTICLES={p.get("fixture_articles", 3)}',
+                         '-e', f'SCENARIO={p.get("crud_scenario", "mix")}']
 
         has_local_k6 = False
         try:
@@ -298,16 +307,11 @@ def sample(server, endpoint, duration, p, cpus, directory=None):
         except Exception:
             pass
 
-        script_rel = p.get('k6_script', 'bench/k6/read.js')
         script_path = ROOT / script_rel
 
         if has_local_k6:
-            k6_args = ['k6', 'run', str(script_path),
-                       '-e', f'TARGET_URL={server.url}{endpoint}',
-                       '-e', f'DURATION={int(duration)}s',
-                       '-e', f'RATE={rate}',
-                       '-e', f'TIMEOUT={int(p["request_timeout"])}s',
-                       '--summary-export', str(summary_path)]
+            k6_args = ['taskset', '-c', client_cpus, 'k6', 'run', str(script_path),
+                       *env_args, '-e', f'SUMMARY_PATH={summary_path}']
             command(k6_args, timeout=duration + p['request_timeout'] + 30)
         else:
             k6_args = [
@@ -316,17 +320,23 @@ def sample(server, endpoint, duration, p, cpus, directory=None):
                 '--network', 'host',
                 '-v', f'{script_path.resolve()}:/test_script.js:ro',
                 '-v', f'{output_dir.resolve()}:/output',
-                '-e', f'TARGET_URL={server.url}{endpoint}',
-                '-e', f'DURATION={int(duration)}s',
-                '-e', f'RATE={rate}',
-                '-e', f'TIMEOUT={int(p["request_timeout"])}s',
-                'grafana/k6:latest', 'run', '/test_script.js',
-                '--summary-export', '/output/k6-summary.json'
+                *env_args,
+                '-e', 'SUMMARY_PATH=/output/k6-summary.json',
+                'grafana/k6:latest', 'run', '/test_script.js'
             ]
             command(k6_args, timeout=duration + p['request_timeout'] + 60)
 
-        if summary_path.exists():
-            return json.loads(summary_path.read_text(encoding='utf-8'))
+        if not summary_path.exists():
+            raise RuntimeError(f'k6 produced no normalized summary: {summary_path}')
+        measured = json.loads(summary_path.read_text(encoding='utf-8'))
+        required = ('elapsed', 'rps', 'p95_ms', 'requests_total', 'requests_successful',
+                    'requests_failed', 'iterations_dropped', 'client_saturated')
+        if measured.get('driver') not in ('k6-open-arrival', 'k6-crud') or any(k not in measured for k in required):
+            raise ValueError(f'Invalid k6 summary schema: {summary_path}')
+        if measured['elapsed'] <= 0 or (measured['requests_successful'] > 0 and (
+                measured['p95_ms'] <= 0 or measured.get('latency_ms', {}).get('p99', 0) <= 0)):
+            raise ValueError(f'Incomplete k6 duration or latency metrics: {summary_path}')
+        return measured
 
     args = [sys.executable, str(ROOT / 'scripts/bench/driver.py'), server.url + endpoint,
             '--duration', str(duration), '--connections', str(p['connections']),
@@ -363,14 +373,18 @@ def trials(p, cpus, output, checks):
                         row.update(status='not_run', reason='Insufficient remaining measurement budget')
                     else:
                         collector = None
+                        telemetry = {'status': 'unavailable', 'reason': 'Collector could not be started'}
                         try:
                             import collect
                             collector = collect.ResourceCollector(server.name, interval=1.0)
                             collector.start()
-                        except Exception:
-                            pass
-                        measured = sample(server, trial['endpoint'], p['measurement_seconds'], p, cpus, directory)
-                        telemetry = collector.stop() if collector else {}
+                        except Exception as e:
+                            telemetry = {'status': 'unavailable', 'reason': str(e)}
+                        try:
+                            measured = sample(server, trial['endpoint'], p['measurement_seconds'], p, cpus, directory)
+                        finally:
+                            if collector:
+                                telemetry = collector.stop()
                         save(directory / 'telemetry.json', telemetry)
                         diag_end = server.get_diagnostics() if p.get('diagnostics') else None
                         diag_data = {'start': diag_start, 'warmup': diag_warmup, 'end': diag_end} if p.get('diagnostics') else None
@@ -380,7 +394,9 @@ def trials(p, cpus, output, checks):
                         total_reqs = measured.get('requests_total') or (succ_reqs + (measured.get('requests_failed') or measured.get('errors', 0))) or 1
                         failed_reqs = measured.get('requests_failed') if 'requests_failed' in measured else measured.get('errors', 0)
                         err_rate = failed_reqs / total_reqs if total_reqs > 0 else 0.0
-                        has_errors = (succ_reqs == 0) or (err_rate > p.get('max_error_rate', 0.05))
+                        operations = measured.get('operations', {})
+                        has_errors = (succ_reqs == 0) or (err_rate > p.get('max_error_rate', 0.05)) or (
+                            operations.get('failed', 0) > 0)
                         final_status = 'failed' if has_errors else ('unstable' if not ready else 'passed')
                         row.update(status=final_status, measurement=measured, telemetry=telemetry)
                         if diag_data:
@@ -447,6 +463,10 @@ def main():
     targets_val = args.targets or env_targets
     if targets_val:
         p['targets'] = select(targets_val.split(','))
+    minimum = len(p['targets']) * len(p['endpoints']) * p['repetitions'] * (
+        p['warmup_min_seconds'] + p['measurement_seconds'])
+    if p['total_timeout'] < minimum:
+        raise ValueError(f'total_timeout {p["total_timeout"]}s cannot fit the minimum {minimum}s of trials')
     mem_val = args.memory_mb or (int(env_memory_mb) if env_memory_mb else None)
     if mem_val:
         p['memory_mb'] = mem_val
@@ -470,9 +490,9 @@ def main():
          'cpuinfo':Path('/proc/cpuinfo').read_text() if Path('/proc/cpuinfo').exists() else '',
          'cpus':cpus,
          'git_commit':command(['git','rev-parse','HEAD']), 'git_status':command(['git','status','--porcelain']),
-         'profile_sha256':hashlib.sha256(Path(args.profile).read_bytes()).hexdigest(),
+         'profile_sha256':hashlib.sha256(Path(profile_path).read_bytes()).hexdigest(),
          'target_sha256':hashlib.sha256((ROOT/'bench/targets.yml').read_bytes()).hexdigest(),
-         'docker_version':command(['docker','version','--format','{{json .}}'], check=False),
+         'docker_version':command(['docker','version','--format','{{json .}}'], check=False) if shutil.which('docker') else None,
          'cpu_smt_siblings':{str(c):Path(f'/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list').read_text().strip()
              for c in cpus['app']+cpus['client'] if Path(f'/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list').exists()}})
     def interrupt(*_):
@@ -487,21 +507,27 @@ def main():
                 save(output / 'preflight/preflight.json', checks)
             else:
                 checks = preflight(p['targets'],output/'preflight',p,cpus)
+            if args.action == 'run' and p.get('k6_script') == 'bench/k6/crud.js':
+                required = {'create', 'create_invalid', 'update', 'update_invalid',
+                            'delete', 'json_create_invalid', 'csrf_invalid'}
+                missing = {target: sorted(case for case in required
+                    if checks[target].get('cases', {}).get(case, {}).get('status') != 'passed')
+                    for target in p['targets']}
+                missing = {target: cases for target, cases in missing.items() if cases}
+                if missing:
+                    raise RuntimeError(f'CRUD preflight requires passing write and CSRF cases: {missing}')
             if args.action == 'run':
                 rows = trials(p,cpus,output/'trials',checks)
                 save(output/'summary.json',{'purpose':'Benchmark trial execution summary',
                     'passed':sum(r['status']=='passed' for r in rows),'total':len(rows)})
-                try:
-                    report(output)
-                except Exception:
-                    pass
+                report(output)
                 allowed_statuses = ('passed', 'excluded', 'unstable') if p.get('allow_unstable') else ('passed', 'excluded')
                 if any(r['status'] not in allowed_statuses for r in rows):
                     return 1
             if any(not set(p['endpoints']).issubset(checks[n]['eligible_endpoints']) for n in p['targets']):
                 return 1
         return 0
-    except (RuntimeError,ValueError,OSError,KeyboardInterrupt,subprocess.TimeoutExpired) as e:
+    except (Exception, KeyboardInterrupt) as e:
         save(output/'failure.json',{'status':'failed','reason':str(e) or 'interrupted'})
         print(str(e),file=sys.stderr); return 1
 
