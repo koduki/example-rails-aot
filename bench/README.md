@@ -94,6 +94,9 @@ validation error shape and CSRF rejection; `preflight.json` reports the exact
 status for each target and case. An endpoint becomes eligible only when its own
 comparison passes. A passing read does not imply full application equivalence.
 Do not compare throughput from failed or excluded cases.
+Reuse of `preflight.json` requires its adjacent `preflight-manifest.json` and
+matching source revision, validation code, target matrix, container images,
+and result digest. Changed inputs require another preflight.
 
 ## Load generation, telemetry, and pairwise reports (P1)
 

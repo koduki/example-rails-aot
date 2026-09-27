@@ -93,6 +93,8 @@ class SmokeProfileTests(unittest.TestCase):
             }
             preflight_file = root / 'preflight.json'
             preflight_file.write_text(json.dumps(preflight_data), encoding='utf-8')
+            with patch('run.preflight_identity', return_value={'image_ids': {'app': 'sha256:fixed'}}):
+                run.save_preflight_manifest(preflight_file, list(preflight_data))
 
             # Run with --preflight-file
             test_args = [
@@ -111,6 +113,7 @@ class SmokeProfileTests(unittest.TestCase):
             ]
 
             with patch.object(sys, 'argv', test_args), \
+                 patch('run.preflight_identity', return_value={'image_ids': {'app': 'sha256:fixed'}}), \
                  patch('run.trials', return_value=mock_trials) as mock_run_trials, \
                  patch('run.preflight') as mock_preflight:
                 ret = run.main()
@@ -118,8 +121,28 @@ class SmokeProfileTests(unittest.TestCase):
                 mock_preflight.assert_not_called()
                 mock_run_trials.assert_called_once()
                 self.assertTrue((root / 'output/preflight/preflight.json').exists())
+                self.assertTrue((root / 'output/preflight/preflight-manifest.json').exists())
                 saved_checks = json.loads((root / 'output/preflight/preflight.json').read_text(encoding='utf-8'))
                 self.assertEqual(saved_checks, preflight_data)
+
+    def test_preflight_reuse_rejects_stale_source_images_and_result_changes(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'preflight.json'
+            data = {'rails-cruby-off': {'eligible_endpoints': ['/articles']},
+                    'rails-cruby-yjit': {'eligible_endpoints': ['/articles']}}
+            run.save(path, data)
+            with patch('run.preflight_identity', return_value={'image_ids': {'rails': 'sha256:original'}}):
+                run.save_preflight_manifest(path, list(data))
+                self.assertEqual(run.reuse_preflight(path, ['rails-cruby-yjit']), data)
+            with patch('run.preflight_identity', return_value={'image_ids': {'rails': 'sha256:changed'}}):
+                with self.assertRaisesRegex(ValueError, 'images changed'):
+                    run.reuse_preflight(path, ['rails-cruby-yjit'])
+            with patch('run.preflight_identity', return_value={'image_ids': {'rails': 'sha256:original'}}):
+                with self.assertRaisesRegex(ValueError, 'target coverage'):
+                    run.reuse_preflight(path, ['spinel'])
+                run.save(path, {'rails-cruby-off': {'eligible_endpoints': []}})
+                with self.assertRaisesRegex(ValueError, 'results changed'):
+                    run.reuse_preflight(path, ['rails-cruby-off'])
 
     def test_report_failure_marks_run_failed(self):
         with tempfile.TemporaryDirectory() as d:
@@ -128,12 +151,15 @@ class SmokeProfileTests(unittest.TestCase):
             check_file.write_text(json.dumps({'rails-cruby-off': {
                 'eligible_endpoints': ['/articles'], 'cases': {'/articles': {'status': 'passed'}}
             }}))
+            with patch('run.preflight_identity', return_value={'image_ids': {'app': 'sha256:fixed'}}):
+                run.save_preflight_manifest(check_file, ['rails-cruby-off'])
             args = ['run.py', 'run', '--profile', str(ROOT / 'bench/profiles/smoke.yml'),
                     '--targets', 'rails-cruby-off', '--preflight-file', str(check_file),
                     '--output', str(root / 'output'), '--app-cpus', '0', '--load-cpus', '1']
             rows = [{'target': 'rails-cruby-off', 'endpoint': '/articles', 'repetition': 1,
                      'status': 'passed', 'measurement': {'rps': 10}}]
             with patch.object(sys, 'argv', args), patch('run.trials', return_value=rows), \
+                 patch('run.preflight_identity', return_value={'image_ids': {'app': 'sha256:fixed'}}), \
                  patch('run.report', side_effect=RuntimeError('report corrupted')):
                 self.assertEqual(run.main(), 1)
             failure = json.loads((root / 'output/failure.json').read_text())
