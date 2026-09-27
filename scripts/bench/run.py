@@ -373,7 +373,11 @@ def trials(p, cpus, output, checks):
                         diag_data = {'start': diag_start, 'warmup': diag_warmup, 'end': diag_end} if p.get('diagnostics') else None
                         if diag_data:
                             save(directory / 'diagnostics.json', diag_data)
-                        has_errors = measured.get('errors') or (measured.get('requests_failed', 0) > 0 and measured.get('requests_successful', 0) == 0)
+                        succ_reqs = measured.get('requests_successful') if 'requests_successful' in measured else measured.get('successful', 0)
+                        total_reqs = measured.get('requests_total') or (succ_reqs + (measured.get('requests_failed') or measured.get('errors', 0))) or 1
+                        failed_reqs = measured.get('requests_failed') if 'requests_failed' in measured else measured.get('errors', 0)
+                        err_rate = failed_reqs / total_reqs if total_reqs > 0 else 0.0
+                        has_errors = (succ_reqs == 0) or (err_rate > p.get('max_error_rate', 0.05))
                         final_status = 'failed' if has_errors else ('unstable' if not ready else 'passed')
                         row.update(status=final_status, measurement=measured, telemetry=telemetry)
                         if diag_data:
