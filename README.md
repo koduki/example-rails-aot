@@ -36,6 +36,8 @@ Rails アプリを [Roundhouse](https://github.com/rubys/roundhouse) で変換�
 
 初回の事前比較では全9構成の5種類の読み取り経路が適格でした。その後、ベンチマーク専用コピーに限って Rails の CSRF 検証を無効化し、正常系の更新および作成・削除を別シナリオで検証できるようにしました。[CRUD 検証手順](docs/benchmark.md#benchmark-only-crud-scope)を参照してください。無効な書き込みの HTML 表示、JSON バリデーションエラー、不正 CSRF トークンの拒否には差が残り、アプリ全体の同等性は未達です。上記の予備測定の倍率は最大処理容量や JIT の因果的な寄与を示しません。専用 GCE ホストでの反復測定、open-arrival 負荷での容量探索は未実施です。条件、p95/p99、CPU、除外理由、次の検証項目は[調査レポート](docs/benchmark-results.md)に記載しています。
 
+[後続の Actions 実行 36320457786](https://github.com/koduki/example-rails-aot/actions/runs/36320457786)では、JRuby JIT Off を含む**全9構成**で正常系の読み取り・更新と作成・削除がそれぞれ **9/9 件 `verified`** でした。各試行の DB 照合は成功し、HTTP 失敗・反復 drop はゼロです。これは低負荷の機能確認であり、上表の処理量・遅延との比較や性能倍率には使いません。[生データ](https://github.com/koduki/example-rails-aot/actions/runs/36320457786/artifacts/10932791366)を参照してください。
+
 ### 結果の採用条件
 
 1. `preflight/preflight.json` で**そのターゲット・経路**が `eligible_endpoints` に含まれること。読み取りが通っても書き込みの適格性は得られません。

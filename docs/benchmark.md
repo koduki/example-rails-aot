@@ -221,3 +221,11 @@ excluded from the statistical report. For latency comparisons, copy a CRUD
 profile, remove `verification_only`, use longer windows, warmup and repeated
 measurement periods, and reject `unstable` trials on a dedicated host. A fixed
 offered rate still does not establish maximum capacity or a JIT speedup ratio.
+
+The subsequent [Actions run 36320457786](https://github.com/koduki/example-rails-aot/actions/runs/36320457786)
+verified all nine targets in both scenarios: 9/9 `verified` for read/update and
+9/9 for create/delete. Every `database_check` passed, with zero failed HTTP
+requests and zero dropped iterations. The [raw artifact](https://github.com/koduki/example-rails-aot/actions/runs/36320457786/artifacts/10932791366)
+contains the preflight, per-trial measurements, database snapshots, and
+resource telemetry. These are functional checks under low offered load, not
+steady-state latency or capacity estimates.
