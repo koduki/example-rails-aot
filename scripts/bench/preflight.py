@@ -82,10 +82,13 @@ def canonical(response, expect_json=False):
             'location': relative(response['location']) if response.get('location') else None, 'body': body}
 
 def snapshot(path):
-    with sqlite3.connect(f'file:{Path(path).resolve()}?mode=ro', uri=True) as db:
+    db = sqlite3.connect(f'file:{Path(path).resolve()}?mode=ro', uri=True)
+    try:
         db.row_factory = sqlite3.Row
         return {table: [dict(row) for row in db.execute(f'SELECT * FROM {table} ORDER BY id')]
                 for table in ('articles', 'comments')}
+    finally:
+        db.close()
 
 def canonical_db(rows, initial, start, end):
     result = {}
