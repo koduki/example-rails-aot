@@ -112,13 +112,29 @@ class ReportUnitTests(unittest.TestCase):
             self.assertEqual(len(data['trials']), 3)
 
     def test_functional_smoke_is_not_reported_as_comparable_latency(self):
-        aggregate = report.aggregate_target_endpoint([
+        trial = [
             {'target': 'rails-cruby-off', 'endpoint': '/articles', 'repetition': 1,
-             'status': 'verified', 'measurement': {'rps': 3, 'p95_ms': 10}}
-        ], 'rails-cruby-off', '/articles',
+             'status': 'verified', 'measurement': {'rps': 3, 'p95_ms': 10,
+                 'latency_ms': {'p50': 5, 'p95': 10, 'p99': 20},
+                 'requests_total': 30, 'requests_failed': 0}}
+        ]
+        aggregate = report.aggregate_target_endpoint(trial, 'rails-cruby-off', '/articles',
             {'rails-cruby-off': {'eligible_endpoints': ['/articles']}}, 100, 0.001)
         self.assertEqual(aggregate['valid_repetition_count'], 0)
+        self.assertEqual(aggregate['verified_repetition_count'], 1)
         self.assertIn('Functional smoke only', aggregate['excluded_reasons'][0]['reason'])
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / 'preflight').mkdir()
+            (root / 'trials').mkdir()
+            (root / 'preflight/preflight.json').write_text(json.dumps({
+                'rails-cruby-off': {'eligible_endpoints': ['/articles']}}))
+            (root / 'trials/per-run.json').write_text(json.dumps(trial))
+            report.build_report(root)
+            markdown = (root / 'summary.md').read_text()
+            self.assertIn('✅ verified (functional only)', markdown)
+            self.assertIn('✅ verified | Functional smoke only; no convergence claim | - | - | - | - | 0.00%', markdown)
+            self.assertNotIn('❌ verified', markdown)
 
     def test_fixed_offered_rate_does_not_publish_capacity_ratios(self):
         with tempfile.TemporaryDirectory() as d:
