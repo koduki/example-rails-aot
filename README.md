@@ -17,7 +17,9 @@ Rails アプリを [Roundhouse](https://github.com/rubys/roundhouse) で変換�
 
 ## 調査レポートのサマリー
 
-[初回調査レポート](docs/benchmark-results.md)は [Actions 実行 36289166814](https://github.com/koduki/example-rails-aot/actions/runs/36289166814) の**予備測定**です。測定コミットは `e1dd3903de9dfcc8b87a16f222d0ebe43ca8c614`。GitHub hosted runner 上で、同じ3記事・3コメントの SQLite fixture を使い、`GET /articles` を各構成1回、4接続・10秒の closed-loop 方式で測定しました。以下はその試行での観測値です。
+詳細な技術解説・理論的背景・分析を含む決定版レポートは [**Roundhouse × Rails × JIT / Spinel AOT 総合調査レポート**](docs/roundhouse-rails-jit-aot-report.md) を参照してください。
+
+[初回速報レポート](docs/benchmark-results.md)は [Actions 実行 36289166814](https://github.com/koduki/example-rails-aot/actions/runs/36289166814) の**予備測定**です。測定コミットは `e1dd3903de9dfcc8b87a16f222d0ebe43ca8c614`。GitHub hosted runner 上で、同じ3記事・3コメントの SQLite fixture を使い、`GET /articles` を各構成1回、4接続・10秒の closed-loop 方式で測定しました。以下はその試行での観測値です。
 
 | 実行系 | ターゲット ID | JIT | Roundhouse | RPS | p50 | p95 | コンテナメモリ最大 | 判定 |
 | --- | --- | --- | :---: | ---: | ---: | ---: | ---: | --- |
