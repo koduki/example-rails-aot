@@ -2,11 +2,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-ASSETS="$ROOT/.cache/static-assets"
+APP="${BENCH_APP_DIR:-$ROOT/blog}"
+ASSETS="${BENCH_ASSETS_DIR:-$ROOT/.cache/static-assets}"
 rm -rf "$ASSETS"
 mkdir -p "$ASSETS"
 (
-  cd blog
+  cd "$APP"
   bundle exec rails tailwindcss:build
   cp -a app/javascript/. "$ASSETS/"
   cp -a app/assets/stylesheets/. "$ASSETS/"

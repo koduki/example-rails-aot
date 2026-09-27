@@ -18,3 +18,7 @@ blog/config/credentials*.enc
 blog/app/assets/builds/*
 !blog/app/assets/builds/.keep
 blog/public/assets/
+
+# Benchmark trial data and generated source copies
+/bench-results/
+__pycache__/

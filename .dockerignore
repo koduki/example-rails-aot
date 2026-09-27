@@ -1,0 +1,11 @@
+.git
+.toolchain
+.cache
+out
+reports
+artifacts
+bench-results
+**/__pycache__
+blog/storage/*.sqlite3*
+blog/log/*
+blog/tmp/*
