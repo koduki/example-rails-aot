@@ -82,6 +82,15 @@ def allocation(p, app_cpus=None, load_cpus=None):
         raise ValueError('Need distinct allowed CPUs for the application and load generator')
     return {'app': app, 'client': client, 'allowed': allowed}
 
+def cpuset(value):
+    ids = set()
+    for part in value.split(','):
+        bounds = part.split('-')
+        if len(bounds) == 1: ids.add(int(bounds[0]))
+        elif len(bounds) == 2: ids.update(range(int(bounds[0]),int(bounds[1])+1))
+        else: raise ValueError('Invalid cgroup cpuset')
+    return ids
+
 def stable(windows, p):
     n = p['stable_windows']
     if len(windows) < n:
@@ -135,6 +144,15 @@ class Server:
                     if response['status'] == 200:
                         self.info['ready_seconds'] = time.monotonic()-start
                         save(self.directory/'runtime.json',self.info)
+                        limits = self.record_cpu('cpu-start.json')
+                        effective = limits.get('cpuset.cpus.effective')
+                        if isinstance(effective,str) and cpuset(effective) != set(self.cpus['app']):
+                            raise RuntimeError('Container effective CPU set differs from requested CPU set')
+                        quota = limits.get('cpu.max')
+                        if isinstance(quota,str):
+                            maximum,period = quota.split()
+                            if maximum != 'max' and int(maximum)/int(period) < len(self.cpus['app']):
+                                raise RuntimeError('Container CPU quota is lower than requested CPU count')
                         return self
                     last = f'Articles status {response["status"]}'
                 except (OSError, ValueError, KeyError) as e:
@@ -147,6 +165,7 @@ class Server:
     def __exit__(self, *_):
         # Cleanup cannot be skipped by a failed log/inspect call.
         try:
+            self.record_cpu('cpu-end.json')
             with contextlib.suppress(OSError, RuntimeError, subprocess.TimeoutExpired):
                 command(['docker','logs',self.name],log=self.directory/'server.log',check=False,timeout=30)
             with contextlib.suppress(OSError, RuntimeError, subprocess.TimeoutExpired, ValueError, KeyError, IndexError):
@@ -154,7 +173,41 @@ class Server:
                 save(self.directory/'container.json', {'image':inspect['Image'],'state':inspect['State'],
                      'host_config':{k:inspect['HostConfig'].get(k) for k in ('CpusetCpus','Memory','MemorySwap')}})
         finally:
-            command(['docker','rm','-f',self.name],check=False,timeout=30)
+            command(['docker','rm','-f',self.name],timeout=30)
+
+    def record_cpu(self, filename):
+        # cgroup v2 exposes throttling and the effective cpuset. Retain an
+        # explicit unavailable marker on hosts using a different layout.
+        observed = {}
+        for path in ('cpu.stat','cpu.max','cpuset.cpus.effective'):
+            try:
+                observed[path] = command(['docker','exec',self.name,'cat','/sys/fs/cgroup/'+path],
+                                         check=True,timeout=10)
+            except (RuntimeError,OSError,subprocess.TimeoutExpired) as e:
+                observed[path] = {'unavailable':str(e)}
+        save(self.directory/filename,observed)
+        return observed
+
+def report(output):
+    """Summarize the correctness gate and trial disposition, never rank throughput."""
+    root = Path(output)
+    checks = json.loads((root/'preflight/preflight.json').read_text())
+    eligible = sorted(set.intersection(*(set(v.get('eligible_endpoints',[])) for v in checks.values())))
+    data = {'purpose':'P0 validity and execution status; not a capacity ranking',
+            'eligible_common_reads':eligible,
+            'preflight':{name:{'eligible_endpoints':value.get('eligible_endpoints',[]),
+                'cases':{case:entry['status'] for case,entry in value.get('cases',{}).items()},
+                'status':value.get('status','checked')} for name,value in checks.items()}}
+    trials_file = root/'trials/per-run.json'
+    if trials_file.exists():
+        rows = json.loads(trials_file.read_text())
+        data['trial_status_counts'] = {s:sum(row['status']==s for row in rows)
+                                        for s in sorted({row['status'] for row in rows})}
+        data['invalid_trials'] = [dict(target=row['target'],endpoint=row['endpoint'],
+            repetition=row['repetition'],status=row['status'],reason=row.get('reason'))
+            for row in rows if row['status'] != 'passed']
+    save(root/'report.json',data)
+    return data
 
 def build(names, output):
     builds = []
@@ -245,12 +298,14 @@ def trials(p, cpus, output, checks):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['build','preflight','run'])
+    parser.add_argument('action', choices=['build','preflight','run','report'])
     parser.add_argument('--profile',default=str(ROOT/'bench/profiles/quick.yml'))
     parser.add_argument('--targets',help='Comma-separated target IDs; default from profile')
     parser.add_argument('--output',default='bench-results/'+time.strftime('%Y%m%dT%H%M%S')+'-'+uuid.uuid4().hex[:6])
     parser.add_argument('--app-cpus'); parser.add_argument('--load-cpus'); parser.add_argument('--dry-run',action='store_true')
     args = parser.parse_args()
+    if args.action == 'report':
+        print(json.dumps(report(args.output),indent=2,ensure_ascii=False)); return 0
     p = config(args.profile)
     if args.targets:
         p['targets'] = select(args.targets.split(','))
@@ -266,7 +321,9 @@ def main():
          'git_commit':command(['git','rev-parse','HEAD']), 'git_status':command(['git','status','--porcelain']),
          'profile_sha256':hashlib.sha256(Path(args.profile).read_bytes()).hexdigest(),
          'target_sha256':hashlib.sha256((ROOT/'bench/targets.yml').read_bytes()).hexdigest(),
-         'docker_version':command(['docker','version','--format','{{json .}}'])})
+         'docker_version':command(['docker','version','--format','{{json .}}']),
+         'cpu_smt_siblings':{str(c):Path(f'/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list').read_text().strip()
+             for c in cpus['app']+cpus['client'] if Path(f'/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list').exists()}})
     def interrupt(*_):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM,interrupt)

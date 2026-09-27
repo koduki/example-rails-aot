@@ -4,13 +4,13 @@ ARG NATIVE_IMAGE=ubuntu:24.04
 FROM ${CRUBY_IMAGE} AS ruby-base
 RUN apt-get update -qq && apt-get install -y --no-install-recommends python3 nodejs clang make libsqlite3-dev libjemalloc-dev sqlite3 pkg-config && rm -rf /var/lib/apt/lists/*
 RUN gem install bundler -v 2.6.9 --no-document
-ENV BUNDLE_FROZEN=true BUNDLE_WITHOUT=development:test RAILS_ENV=production BENCH_JIT=off BLOG_DB=/tmp/assets.sqlite3 SECRET_KEY_BASE=benchmark-build-only
+ENV BUNDLE_FROZEN=true BUNDLE_WITHOUT=development:test RAILS_ENV=production BENCH_JIT=off BLOG_DB=/tmp/assets.sqlite3
 WORKDIR /src
 COPY . .
 RUN python3 scripts/bench/prepare_app.py out/bench-app
 WORKDIR /src/out/bench-app
 RUN bundle install
-RUN bundle exec rails assets:precompile
+RUN SECRET_KEY_BASE=benchmark-build-only bundle exec rails assets:precompile
 FROM ruby-base AS emit
 WORKDIR /src
 RUN bash scripts/install-toolchain.sh
@@ -28,7 +28,10 @@ COPY bench/runtime /bench/runtime
 ENV BENCH_RUNTIME=cruby BENCH_SHAPE=rails BUNDLE_FROZEN=true RAILS_ENV=production
 ENTRYPOINT ["/bench/runtime/entrypoint.sh"]
 
-FROM ${JRUBY_IMAGE} AS rails-jruby
+FROM ${JRUBY_IMAGE} AS jruby-base
+RUN apt-get update -qq && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
+
+FROM jruby-base AS rails-jruby
 WORKDIR /app
 COPY --from=ruby-base /src/out/bench-app /app
 RUN gem install bundler -v 2.6.9 --no-document && bundle config set frozen true && bundle install
@@ -44,7 +47,7 @@ COPY bench/runtime /bench/runtime
 ENV BENCH_RUNTIME=cruby BENCH_SHAPE=emitted RAILS_ENV=production
 ENTRYPOINT ["/bench/runtime/entrypoint.sh"]
 
-FROM ${JRUBY_IMAGE} AS emitted-jruby
+FROM jruby-base AS emitted-jruby
 WORKDIR /app
 COPY --from=emit /src/out/bench-jruby /app
 RUN gem install bundler -v 2.6.9 --no-document && bundle config set frozen true && bundle install

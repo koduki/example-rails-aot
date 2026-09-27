@@ -207,6 +207,29 @@ def capture(base_url, database, target):
         'raw': response, 'reason': 'Invalid CSRF must be rejected without a write'}
     return result
 
+def first_difference(expected, actual, path='$'):
+    """Point to the first semantic difference without dumping entire responses."""
+    if type(expected) is not type(actual):
+        return {'path':path,'expected':repr(expected)[:300],'actual':repr(actual)[:300]}
+    if isinstance(expected, dict):
+        for key in sorted(expected.keys() | actual.keys()):
+            if key not in expected or key not in actual:
+                return {'path':path+'.'+str(key), 'expected':repr(expected.get(key,'<missing>'))[:300],
+                        'actual':repr(actual.get(key,'<missing>'))[:300]}
+            found = first_difference(expected[key],actual[key],path+'.'+str(key))
+            if found: return found
+        return None
+    if isinstance(expected, list):
+        if len(expected) != len(actual):
+            return {'path':path+'.length','expected':len(expected),'actual':len(actual)}
+        for i,(left,right) in enumerate(zip(expected,actual)):
+            found = first_difference(left,right,f'{path}[{i}]')
+            if found: return found
+        return None
+    if expected != actual:
+        return {'path':path,'expected':repr(expected)[:300],'actual':repr(actual)[:300]}
+    return None
+
 def compare(reference, candidate):
     checks = {}
     for name, expected in reference['cases'].items():
@@ -216,7 +239,10 @@ def compare(reference, candidate):
         elif not actual or actual['status'] != 'passed':
             checks[name] = {'status': 'failed', 'reason': (actual or {}).get('reason', 'Missing case')}
         elif any(expected.get(k) != actual.get(k) for k in ('canonical', 'canonical_db')):
-            checks[name] = {'status': 'failed', 'reason': 'Response or persisted database differs'}
+            checks[name] = {'status': 'failed', 'reason': 'Response or persisted database differs',
+                            'difference':first_difference(
+                                {k:expected.get(k) for k in ('canonical','canonical_db')},
+                                {k:actual.get(k) for k in ('canonical','canonical_db')})}
         else:
             checks[name] = {'status': 'passed'}
     return {'cases': checks, 'eligible_endpoints': [p for p in READS if checks.get(p, {}).get('status') == 'passed'],

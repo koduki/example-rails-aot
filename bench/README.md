@@ -44,6 +44,7 @@ python3 scripts/bench/run.py build --output bench-results/build-001
 python3 scripts/bench/run.py preflight --output bench-results/check-001
 python3 scripts/bench/run.py run --profile bench/profiles/quick.yml \
   --app-cpus 0 --load-cpus 1 --output bench-results/pilot-001
+python3 scripts/bench/run.py report --output bench-results/pilot-001
 ```
 
 Use actual CPUs in the process's affinity mask; the above IDs are examples.
@@ -62,7 +63,10 @@ throughput and p95 across windows. Unstable runs, failed requests, timeouts,
 and endpoints that fail the preflight are labeled separately; they are never
 turned into performance observations. Captures, runtime states, fixture
 hashes, container inspection, logs, windows, and per-trial data remain in the
-output directory. A failed/interrupted process returns a nonzero exit status
+output directory. The offline `report` command summarizes endpoint eligibility
+and trial dispositions without producing a performance ranking. Host SMT
+siblings and container cgroup cpuset/quota/throttling snapshots are recorded.
+A failed/interrupted process returns a nonzero exit status
 and records `failure.json`. Containers are removed on exit. GitHub Actions
 `benchmark-p0.yml` builds and runs correctness gates for all nine targets;
 the original AOT workflow is unchanged.
@@ -72,9 +76,10 @@ the original AOT workflow is unchanged.
 The gate checks status, media type, relevant HTML DOM, JSON values, redirects,
 and database rows after create/update/delete and invalid requests. Only CSRF
 secrets, signed stream tokens, nonce values, and redirect response bodies are
-normalized. Creation/update timestamps must fall inside the operation window
-and unchanged timestamps must stay identical. An HTTP 200 with a JSON fallback
-is a failure. The runtime probe reads actual YJIT/JRuby compiler state and
+normalized. `preflight.json` records the first differing semantic path and
+values for each failed comparison. Creation/update timestamps must fall inside
+the operation window and unchanged timestamps must stay identical. An HTTP 200
+with a JSON fallback is a failure. The runtime probe reads actual YJIT/JRuby compiler state and
 per-connection SQLite pragmas from the server process, outside timed paths.
 
 During local CRuby validation, the five read paths matched after repairing the

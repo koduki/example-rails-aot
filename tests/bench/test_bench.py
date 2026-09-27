@@ -32,7 +32,10 @@ class BenchmarkTests(unittest.TestCase):
         reference = {'cases':{'/articles.json':{'status':'passed', 'canonical':preflight.canonical(good,True)}}}
         candidate = copy.deepcopy(reference)
         candidate['cases']['/articles.json']['canonical']['body']['id'] = 99
-        self.assertEqual(preflight.compare(reference,candidate)['eligible_endpoints'], [])
+        result = preflight.compare(reference,candidate)
+        self.assertEqual(result['eligible_endpoints'], [])
+        self.assertEqual(result['cases']['/articles.json']['difference']['path'],
+                         '$.canonical.body.id')
 
     def test_timestamps_are_not_blindly_removed(self):
         a = {'status':200, 'content_type':'application/json','location':None,
@@ -115,3 +118,20 @@ class LifecycleTests(unittest.TestCase):
         with patch.object(run.os,'sched_getaffinity',return_value={0,1}):
             with self.assertRaises(ValueError): run.allocation(p,'0','0')
             self.assertEqual(run.allocation(p)['client'],[1])
+        self.assertEqual(run.cpuset('1,3-5'),{1,3,4,5})
+
+    def test_report_keeps_ineligible_results_out_of_common_reads(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            run.save(root/'preflight/preflight.json',{
+                'rails-cruby-off':{'eligible_endpoints':['/articles','/articles.json'],
+                                   'cases':{'/articles':{'status':'passed'}}},
+                'emit-cruby-off':{'eligible_endpoints':['/articles'],
+                                  'cases':{'/articles.json':{'status':'failed'}}}})
+            run.save(root/'trials/per-run.json',[
+                {'target':'emit-cruby-off','endpoint':'/articles.json','repetition':1,
+                 'status':'excluded','reason':'Endpoint failed preflight'}])
+            result=run.report(root)
+            self.assertEqual(result['eligible_common_reads'],['/articles'])
+            self.assertEqual(result['trial_status_counts'],{'excluded':1})
+            self.assertNotIn('rps',json.dumps(result))
