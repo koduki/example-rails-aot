@@ -54,6 +54,7 @@ jobs:
           python3 scripts/bench/run.py run --profile bench/profiles/smoke.yml --dry-run > benchmark-plan-smoke.json
           python3 scripts/bench/run.py run --profile bench/profiles/quick.yml --dry-run > benchmark-plan-quick.json
           python3 scripts/bench/run.py run --profile bench/profiles/diagnostic.yml --dry-run > benchmark-plan-diagnostic.json
+          python3 scripts/bench/run.py run --profile bench/profiles/full.yml --dry-run > benchmark-plan-full.json
 
       - name: Configure benchmark parameters
         id: config

@@ -120,9 +120,11 @@ class Server:
         self.directory.mkdir(parents=True, exist_ok=False)
         self.fixture = prepare(self.database)
         t = TARGETS['targets'][self.target]
+        target_host = self.profile.get('target_host', '127.0.0.1')
+        bind_host = '0.0.0.0' if target_host not in ('127.0.0.1', 'localhost') else '127.0.0.1'
         args = ['docker', 'run', '-d', '--name', self.name, '--cpuset-cpus', ','.join(map(str,self.cpus['app'])),
                 '--memory', str(self.profile['memory_mb'])+'m', '--memory-swap', str(self.profile['memory_mb'])+'m',
-                '-p', '127.0.0.1::3000', '--mount', 'type=bind,src='+str(self.database.parent.resolve())+',dst=/data',
+                '-p', f'{bind_host}::3000', '--mount', 'type=bind,src='+str(self.database.parent.resolve())+',dst=/data',
                 '-e', 'BENCH_JIT='+t['jit'], '-e', 'RAILS_MAX_THREADS='+str(self.profile['threads']),
                 '-e', 'SPINEL_WORKERS='+str(self.profile['spinel_workers'])]
         if self.profile.get('diagnostics'):
@@ -133,7 +135,7 @@ class Server:
             start = time.monotonic()
             command(args)
             port = command(['docker','port',self.name,'3000/tcp']).rsplit(':',1)[1]
-            self.url = 'http://127.0.0.1:'+port
+            self.url = f'http://{target_host}:{port}'
             client = HttpClient(self.url)
             deadline = start + self.profile['ready_timeout']
             last = ''
@@ -371,7 +373,11 @@ def trials(p, cpus, output, checks):
                         diag_data = {'start': diag_start, 'warmup': diag_warmup, 'end': diag_end} if p.get('diagnostics') else None
                         if diag_data:
                             save(directory / 'diagnostics.json', diag_data)
-                        has_errors = measured.get('errors') or (measured.get('requests_failed', 0) > 0 and measured.get('requests_successful', 0) == 0)
+                        succ_reqs = measured.get('requests_successful') if 'requests_successful' in measured else measured.get('successful', 0)
+                        total_reqs = measured.get('requests_total') or (succ_reqs + (measured.get('requests_failed') or measured.get('errors', 0))) or 1
+                        failed_reqs = measured.get('requests_failed') if 'requests_failed' in measured else measured.get('errors', 0)
+                        err_rate = failed_reqs / total_reqs if total_reqs > 0 else 0.0
+                        has_errors = (succ_reqs == 0) or (err_rate > p.get('max_error_rate', 0.05))
                         final_status = 'failed' if has_errors else ('unstable' if not ready else 'passed')
                         row.update(status=final_status, measurement=measured, telemetry=telemetry)
                         if diag_data:
@@ -382,29 +388,80 @@ def trials(p, cpus, output, checks):
         save(output / 'per-run.json', result)
     return result
 
+def load_env_file(path):
+    """Load key-value environment variables from file."""
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f'Environment file not found: {path}')
+    loaded = {}
+    for line in p.read_text(encoding='utf-8').splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            loaded[k.strip()] = v.strip().strip('"\'')
+    return loaded
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['build','preflight','run','report'])
-    parser.add_argument('--profile',default=str(ROOT/'bench/profiles/quick.yml'))
+    parser.add_argument('--profile',default=str(ROOT/'bench/profiles/quick.yml'),
+                        help='Path to benchmark profile YAML/JSON (default: bench/profiles/quick.yml)')
     parser.add_argument('--targets',help='Comma-separated target IDs; default from profile')
-    parser.add_argument('--output',default='bench-results/'+time.strftime('%Y%m%dT%H%M%S')+'-'+uuid.uuid4().hex[:6])
-    parser.add_argument('--app-cpus'); parser.add_argument('--load-cpus'); parser.add_argument('--dry-run',action='store_true')
+    parser.add_argument('--output',default='bench-results/'+time.strftime('%Y%m%dT%H%M%S')+'-'+uuid.uuid4().hex[:6],
+                        help='Destination directory for raw benchmark artifacts')
+    parser.add_argument('--app-cpus', help='Comma-separated CPU IDs dedicated to application container')
+    parser.add_argument('--load-cpus', help='Comma-separated CPU IDs dedicated to load generator')
+    parser.add_argument('--memory-mb', type=int, help='Override memory limit in MB for target containers')
+    parser.add_argument('--target-host', help='Hostname or IP for load generator connection (default: 127.0.0.1)')
+    parser.add_argument('--env-file', help='Path to environment configuration file (e.g. bench/environments/local-single-host.env)')
+    parser.add_argument('--dry-run',action='store_true', help='Validate configuration and print execution plan without running')
     parser.add_argument('--preflight-file', help='Path to existing preflight.json to reuse')
     parser.add_argument('--seed', type=int, help='Override random seed for scheduling')
     args = parser.parse_args()
+
+    loaded = load_env_file(args.env_file) if args.env_file else {}
+    env_profile = loaded.get('BENCH_PROFILE') or os.environ.get('BENCH_PROFILE')
+    env_targets = loaded.get('BENCH_TARGETS') or os.environ.get('BENCH_TARGETS')
+    env_output = loaded.get('BENCH_OUTPUT') or os.environ.get('BENCH_OUTPUT')
+    env_app_cpus = loaded.get('BENCH_APP_CPUS') or os.environ.get('BENCH_APP_CPUS')
+    env_load_cpus = loaded.get('BENCH_LOAD_CPUS') or os.environ.get('BENCH_LOAD_CPUS')
+    env_target_host = loaded.get('BENCH_TARGET_HOST') or os.environ.get('BENCH_TARGET_HOST')
+    env_memory_mb = loaded.get('BENCH_MEMORY_MB') or os.environ.get('BENCH_MEMORY_MB')
+    env_seed = loaded.get('BENCH_SEED') or os.environ.get('BENCH_SEED')
+
+    output_path = args.output
+    if args.output.startswith('bench-results/') and env_output:
+        output_path = env_output
+
     if args.action == 'report':
-        print(json.dumps(report(args.output),indent=2,ensure_ascii=False)); return 0
-    p = config(args.profile)
-    if args.targets:
-        p['targets'] = select(args.targets.split(','))
-    if args.seed is not None:
-        p['seed'] = args.seed
-    cpus = allocation(p,args.app_cpus,args.load_cpus)
+        print(json.dumps(report(output_path),indent=2,ensure_ascii=False)); return 0
+
+    profile_path = args.profile
+    if args.profile == str(ROOT/'bench/profiles/quick.yml') and env_profile:
+        profile_path = env_profile
+
+    p = config(profile_path)
+    targets_val = args.targets or env_targets
+    if targets_val:
+        p['targets'] = select(targets_val.split(','))
+    mem_val = args.memory_mb or (int(env_memory_mb) if env_memory_mb else None)
+    if mem_val:
+        p['memory_mb'] = mem_val
+    th_val = args.target_host or env_target_host
+    if th_val:
+        p['target_host'] = th_val
+    seed_val = args.seed if args.seed is not None else (int(env_seed) if env_seed is not None else None)
+    if seed_val is not None:
+        p['seed'] = seed_val
+
+    app_cpus = args.app_cpus or env_app_cpus
+    load_cpus = args.load_cpus or env_load_cpus
+    cpus = allocation(p, app_cpus, load_cpus)
     plan = {'profile':p,'cpus':cpus,'schedule':schedule(p),'action':args.action,
             'reference':TARGETS['reference'],'targets':TARGETS}
     if args.dry_run:
         print(json.dumps(plan,indent=2)); return 0
-    output = Path(args.output).resolve(); output.mkdir(parents=True,exist_ok=False)
+    output = Path(output_path).resolve(); output.mkdir(parents=True,exist_ok=False)
     save(output/'plan.json',plan)
     save(output/'env.json', {'schema_version':1,'platform':platform.platform(),'python':sys.version,
          'cpuinfo':Path('/proc/cpuinfo').read_text() if Path('/proc/cpuinfo').exists() else '',
