@@ -200,6 +200,7 @@ def compute_pairwise_comparisons(aggregates, endpoint):
     # JRuby compile mode speedup: JIT / OFF
     jruby_jit_speedup_rails = compute_ratio(r_jruby, r_jruby_off)
     jruby_jit_speedup_emitted = compute_ratio(e_jruby, e_jruby_off)
+    jruby_interaction_ratio = compute_ratio(jruby_jit_speedup_emitted, jruby_jit_speedup_rails)
 
     # Spinel comparative position (whole-system difference: HTTP server, DB adapter, native AOT)
     spinel_vs_rails_cruby_off = compute_ratio(s_spinel, r_cruby_off)
@@ -221,6 +222,7 @@ def compute_pairwise_comparisons(aggregates, endpoint):
         'jruby_compile_mode_ratio': {
             'rails': jruby_jit_speedup_rails,
             'emitted': jruby_jit_speedup_emitted,
+            'interaction_ratio': jruby_interaction_ratio,
         },
         'spinel_system_comparison': {
             'note': 'Full architectural difference (Spinel AOT + embedded HTTP/DB vs Puma + CRuby)',
@@ -269,16 +271,18 @@ def generate_markdown_report(report_data):
         rh = comp['roundhouse_speedup']
         lines.append(f"| Roundhouse Speedup (CRuby JIT Off) | **{rh['cruby_off'] or 'N/A'}** | $capacity_{{emit}} / capacity_{{rails}}$ |")
         lines.append(f"| Roundhouse Speedup (CRuby YJIT) | **{rh['cruby_yjit'] or 'N/A'}** | $capacity_{{emit}} / capacity_{{rails}}$ |")
-        lines.append(f"| Roundhouse Speedup (JRuby) | **{rh['jruby_jit'] or 'N/A'}** | $capacity_{{emit}} / capacity_{{rails}}$ |")
+        lines.append(f"| Roundhouse Speedup (JRuby compile.mode=JIT) | **{rh['jruby_jit'] or 'N/A'}** | $capacity_{{emit}} / capacity_{{rails}}$ |")
+        lines.append(f"| Roundhouse Speedup (JRuby compile.mode=OFF) | **{rh['jruby_off'] or 'N/A'}** | $capacity_{{emit}} / capacity_{{rails}}$ (JVM JIT active) |")
 
         yj = comp['yjit_speedup_g']
         lines.append(f"| Rails YJIT Speedup ($G_{{Rails}}$) | **{yj['rails'] or 'N/A'}** | $capacity_{{YJIT}} / capacity_{{OFF}}$ |")
         lines.append(f"| Emitted YJIT Speedup ($G_{{emitted}}$) | **{yj['emitted'] or 'N/A'}** | $capacity_{{YJIT}} / capacity_{{OFF}}$ |")
-        lines.append(f"| **Interaction Ratio** | **{yj['interaction_ratio'] or 'N/A'}** | $G_{{emitted}} / G_{{Rails}}$ |")
+        lines.append(f"| **YJIT Interaction Ratio** | **{yj['interaction_ratio'] or 'N/A'}** | $G_{{emitted}} / G_{{Rails}}$ |")
 
         jr = comp['jruby_compile_mode_ratio']
         lines.append(f"| JRuby Compile Mode Speedup (Rails) | **{jr['rails'] or 'N/A'}** | $capacity_{{compile.mode=JIT}} / capacity_{{compile.mode=OFF}}$ |")
         lines.append(f"| JRuby Compile Mode Speedup (Emitted) | **{jr['emitted'] or 'N/A'}** | $capacity_{{compile.mode=JIT}} / capacity_{{compile.mode=OFF}}$ |")
+        lines.append(f"| **JRuby Interaction Ratio** | **{jr.get('interaction_ratio') or 'N/A'}** | $G_{{JRuby,emitted}} / G_{{JRuby,Rails}}$ |")
 
         sp = comp['spinel_system_comparison']
         lines.append(f"| Spinel vs Rails CRuby Off | **{sp['ratio_vs_rails_cruby_off'] or 'N/A'}** | {sp['note']} |")
@@ -354,6 +358,12 @@ def build_report(output_dir, slo_p99_ms=DEFAULT_SLO_P99_MS, slo_error_rate=DEFAU
     (root / 'summary.json').write_text(json.dumps(report_data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
     (root / 'summary.md').write_text(md_content, encoding='utf-8')
     (root / 'summary.csv').write_text(csv_content, encoding='utf-8')
+    # Generate diagnostic report if diagnostic artifacts exist
+    try:
+        import diagnostic as p1_diag
+        p1_diag.build_diagnostic_report(root)
+    except Exception:
+        pass
 
     return report_data
 

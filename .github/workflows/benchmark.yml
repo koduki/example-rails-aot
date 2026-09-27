@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: 'Benchmark profile (smoke, quick, full)'
+        description: 'Benchmark profile (smoke, quick, full, diagnostic)'
         required: true
         default: 'quick'
         type: choice
@@ -21,6 +21,7 @@ on:
           - quick
           - smoke
           - full
+          - diagnostic
       targets:
         description: 'Comma-separated target list (blank for all profile targets)'
         required: false
@@ -52,6 +53,7 @@ jobs:
           python3 -m unittest discover -s tests/bench -v
           python3 scripts/bench/run.py run --profile bench/profiles/smoke.yml --dry-run > benchmark-plan-smoke.json
           python3 scripts/bench/run.py run --profile bench/profiles/quick.yml --dry-run > benchmark-plan-quick.json
+          python3 scripts/bench/run.py run --profile bench/profiles/diagnostic.yml --dry-run > benchmark-plan-diagnostic.json
 
       - name: Configure benchmark parameters
         id: config
@@ -102,6 +104,9 @@ jobs:
         run: |
           if [ -f bench-results/measurement/summary.md ]; then
             cat bench-results/measurement/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f bench-results/measurement/diagnostics.md ]; then
+            cat bench-results/measurement/diagnostics.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload benchmark artifacts
