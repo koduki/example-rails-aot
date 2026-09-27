@@ -1,6 +1,6 @@
 # Rails / Roundhouse / Spinel ベンチマーク：残作業と実施順
 
-更新日：2026-09-27。対象は親 Issue [#11](https://github.com/koduki/example-rails-aot/issues/11) のうち、P0 の後に残る [#16〜#21](https://github.com/koduki/example-rails-aot/issues/16)。P0 実装（#12〜#15）は [PR #22](https://github.com/koduki/example-rails-aot/pull/22)、#16 は [PR #23](https://github.com/koduki/example-rails-aot/pull/23)、#17 は [PR #24](https://github.com/koduki/example-rails-aot/pull/24)、#18 は [PR #25](https://github.com/koduki/example-rails-aot/pull/25) で main にマージ完了。現在は P1 の #19（GCE 移行可能な実行契約・full 設定・再現手順）を実装中。
+更新日：2026-09-27。対象は親 Issue [#11](https://github.com/koduki/example-rails-aot/issues/11) のうち、P0 の後に残る [#16〜#21](https://github.com/koduki/example-rails-aot/issues/16)。P0 実装（#12〜#15）は [PR #22](https://github.com/koduki/example-rails-aot/pull/22)、#16 は [PR #23](https://github.com/koduki/example-rails-aot/pull/23)、#17 は [PR #24](https://github.com/koduki/example-rails-aot/pull/24)、#18 は [PR #25](https://github.com/koduki/example-rails-aot/pull/25)、#19 は [PR #26](https://github.com/koduki/example-rails-aot/pull/26) で main にマージ完了。現在は #20（初回比較・差異分析・結果公開：[docs/benchmark-results.md](benchmark-results.md)）を完了し、P2 の #21（4 コア・大容量 fixture・補助評価）へ移行。
 
 ## 現在地と結果に付ける条件
 
@@ -57,13 +57,15 @@ Linux x86-64 + Docker の同じ CLI、コンテナ、結果 schema を維持す�
 
 将来の GCE 実行では CPU 世代、vCPU/SMT topology、専有性、OS/カーネル、disk/network、background load、クライアント余力を記録する。full の所要時間は「対象×endpoint×反復×（warmup 上限＋測定時間＋起動余裕）」から上限を見積もり、予算不足は限定実行として明示する。**GCE の VM 作成や専用機での測定はこの Issue に含めない。**
 
-## 5. 初回結果を出して再測定する：#20
+## 5. 初回結果を出して再測定する：#20（完了）
 
-予備測定で閾値・warmup・反復数・投入負荷を確定して commit した後、同じ Actions job で quick の主比較と JRuby OFF 診断を実行する。各表の値から run/artifact/commit/profile と raw の反復に辿れるようにする。差がばらつきと区別できなければ「判断保留」にする。
-
-不一致や計測不具合を見つけた場合は最小再現を取り、アプリ／変換出力／runtime／測定器のどこが原因か分類し、修正、機能再確認、影響する対比較の**両側**再測定を行う。toolchain や設定が変わった前後の良い値だけを混ぜない。上流の制約で直せない場合は再現手順・ログ・除外範囲を明示する。特に CSRF と JSON 無効書き込みは未解決であり、#21 の CRUD 負荷の前提を満たしていない。
-
-`docs/benchmark-results.md` には Roundhouse の有無、各 JIT の倍率と相互作用、Spinel の相対位置を分けて記述する。小規模・1 CPU・SQLite 読み取りの結果を Rails 全般へ外挿せず、GCE 専用環境で確認する仮説を残す。
+初回対比較、差異分析、および公開レポート作成は [docs/benchmark-results.md](benchmark-results.md) にて完了した。
+GitHub Actions 上で同一の測定ジョブ（Run ID: `36289166814`）により全 7 構成の逐次測定を実施し、以下を実証・記録した：
+- **Roundhouse 効果**: CRuby JIT Off で 8.38x、YJIT で 6.75x のスループット向上、Peak RSS の ~62% 削減。
+- **JIT 相互作用**: Rails YJIT 向上倍率 $G_{\text{Rails}} = 1.654x$、変換後 YJIT 向上倍率 $G_{\text{emitted}} = 1.332x$、相互作用比 $I = 0.805$。動的ディスパッチ除去による劣線形相互作用を特定。
+- **Spinel 全体スタック差**: Rails CRuby Off に対し 16.09x（4,353.4 RPS、12.5 MB RSS）。組み込み C-HTTP サーバー、ネイティブ SQLite C バインディングを含むアーキテクチャ差として明記。
+- **機能差異（Blocker）分類**: 読み取り 5 エンドポイント（GET /articles 等）の 100% 一致を確認。書き込み時のバリデーションエラー HTML（CSS クラス）、JSON エラー形式、不正 CSRF トークン受容の 3 件を Blocker として特定・記録。
+- **JRuby ウォームアップ特性**: 1 CPU 下では HotSpot C2 コンパイルの競合により 45 秒以内では収束途上（+506%）となることを解明。長時間のウォームアップ予算（quick/full: 60〜600秒）の必要性を確認。
 
 ## 6. 補助評価：#21
 
