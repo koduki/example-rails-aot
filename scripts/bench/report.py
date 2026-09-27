@@ -100,7 +100,7 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
     p99_list = []
     error_rate_list = []
     cpu_list = []
-    rss_mb_list = []
+    container_mb_list = []
 
     for t in valid_repetitions:
         m = t.get('measurement', {})
@@ -123,8 +123,11 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
         telemetry = t.get('telemetry', {}).get('summary', {})
         if telemetry.get('mean_cpu_pct'):
             cpu_list.append(telemetry['mean_cpu_pct'])
-        if telemetry.get('peak_rss_bytes'):
-            rss_mb_list.append(telemetry['peak_rss_bytes'] / (1024 * 1024))
+        memory_bytes = telemetry.get('peak_container_memory_bytes')
+        if memory_bytes is None:
+            memory_bytes = telemetry.get('peak_rss_bytes')  # Historic docker stats artifact, previously mislabeled.
+        if memory_bytes is not None:
+            container_mb_list.append(memory_bytes / (1024 * 1024))
 
     rps_summary = summarize_series(rps_list)
     p50_summary = summarize_series(p50_list)
@@ -132,7 +135,7 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
     p99_summary = summarize_series(p99_list)
     err_summary = summarize_series(error_rate_list)
     cpu_summary = summarize_series(cpu_list)
-    rss_summary = summarize_series(rss_mb_list)
+    memory_summary = summarize_series(container_mb_list)
 
     # Check SLO compliance based on median of repetition p99s and error rates
     slo_met = False
@@ -153,7 +156,7 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
         'p99_ms': p99_summary,
         'error_rate': err_summary,
         'mean_cpu_pct': cpu_summary,
-        'peak_rss_mb': rss_summary,
+        'peak_container_memory_mb': memory_summary,
     }
 
 def compute_ratio(numerator_val, denominator_val):
@@ -236,13 +239,17 @@ def generate_markdown_report(report_data):
     lines = []
     lines.append('# Benchmark P1 Pairwise Comparison Report\n')
     lines.append('> [!NOTE]')
-    lines.append('> Metrics represent **medians across valid repetitions** under identical offered workloads.')
+    lines.append('> Metrics represent **medians across valid repetitions** under the recorded workload.')
+    if report_data.get('fixed_offered_rate'):
+        lines.append('> Fixed offered RPS measures latency, error rate and resources at that load; it does not establish maximum capacity or JIT throughput speedups.')
+    else:
+        lines.append('> Closed-loop throughput ratios are pilot observations, not sustained capacity estimates.')
     lines.append('> The median of per-run p99s reflects run-to-run consistency and is not a pooling of all requests into a single distribution.')
     lines.append('> Spinel comparison reflects the total architectural execution stack difference (AOT binary, server, adapter).\n')
 
     # Target summaries table
     lines.append('## 1. Target Endpoint Performance Summary\n')
-    lines.append('| Target | Endpoint | Status | Valid Reps | Median RPS | Median p50 (ms) | Median p95 (ms) | Median p99 (ms) | Median Err % | Peak RSS (MB) | Mean CPU % |')
+    lines.append('| Target | Endpoint | Status | Valid Reps | Median RPS | Median p50 (ms) | Median p95 (ms) | Median p99 (ms) | Median Err % | Peak container memory (MB) | Mean CPU % |')
     lines.append('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
 
     for item in report_data['target_aggregates']:
@@ -255,7 +262,7 @@ def generate_markdown_report(report_data):
         p95 = f"{item['p95_ms']['median']}" if item['p95_ms']['median'] is not None else '-'
         p99 = f"{item['p99_ms']['median']}" if item['p99_ms']['median'] is not None else '-'
         err = f"{item['error_rate']['median'] * 100:.2f}%" if item['error_rate']['median'] is not None else '-'
-        rss = f"{item['peak_rss_mb']['median']}" if item['peak_rss_mb']['median'] is not None else '-'
+        rss = f"{item['peak_container_memory_mb']['median']}" if item['peak_container_memory_mb']['median'] is not None else '-'
         cpu = f"{item['mean_cpu_pct']['median']}%" if item['mean_cpu_pct']['median'] is not None else '-'
 
         lines.append(f"| `{target}` | `{endpoint}` | {status} | {reps} | {rps} | {p50} | {p95} | {p99} | {err} | {rss} | {cpu} |")
@@ -269,19 +276,19 @@ def generate_markdown_report(report_data):
         lines.append('| --- | --- | --- |')
 
         rh = comp['roundhouse_speedup']
-        lines.append(f"| Roundhouse Speedup (CRuby JIT Off) | **{rh['cruby_off'] or 'N/A'}** | $capacity_{{emit}} / capacity_{{rails}}$ |")
-        lines.append(f"| Roundhouse Speedup (CRuby YJIT) | **{rh['cruby_yjit'] or 'N/A'}** | $capacity_{{emit}} / capacity_{{rails}}$ |")
-        lines.append(f"| Roundhouse Speedup (JRuby compile.mode=JIT) | **{rh['jruby_jit'] or 'N/A'}** | $capacity_{{emit}} / capacity_{{rails}}$ |")
-        lines.append(f"| Roundhouse Speedup (JRuby compile.mode=OFF) | **{rh['jruby_off'] or 'N/A'}** | $capacity_{{emit}} / capacity_{{rails}}$ (JVM JIT active) |")
+        lines.append(f"| Roundhouse RPS Ratio (CRuby JIT Off) | **{rh['cruby_off'] or 'N/A'}** | $RPS_{{emit}} / RPS_{{rails}}$ |")
+        lines.append(f"| Roundhouse RPS Ratio (CRuby YJIT) | **{rh['cruby_yjit'] or 'N/A'}** | $RPS_{{emit}} / RPS_{{rails}}$ |")
+        lines.append(f"| Roundhouse RPS Ratio (JRuby compile.mode=JIT) | **{rh['jruby_jit'] or 'N/A'}** | $RPS_{{emit}} / RPS_{{rails}}$ |")
+        lines.append(f"| Roundhouse RPS Ratio (JRuby compile.mode=OFF) | **{rh['jruby_off'] or 'N/A'}** | $RPS_{{emit}} / RPS_{{rails}}$ (JVM JIT active) |")
 
         yj = comp['yjit_speedup_g']
-        lines.append(f"| Rails YJIT Speedup ($G_{{Rails}}$) | **{yj['rails'] or 'N/A'}** | $capacity_{{YJIT}} / capacity_{{OFF}}$ |")
-        lines.append(f"| Emitted YJIT Speedup ($G_{{emitted}}$) | **{yj['emitted'] or 'N/A'}** | $capacity_{{YJIT}} / capacity_{{OFF}}$ |")
+        lines.append(f"| Rails YJIT RPS Ratio ($G_{{Rails}}$) | **{yj['rails'] or 'N/A'}** | $RPS_{{YJIT}} / RPS_{{OFF}}$ |")
+        lines.append(f"| Emitted YJIT RPS Ratio ($G_{{emitted}}$) | **{yj['emitted'] or 'N/A'}** | $RPS_{{YJIT}} / RPS_{{OFF}}$ |")
         lines.append(f"| **YJIT Interaction Ratio** | **{yj['interaction_ratio'] or 'N/A'}** | $G_{{emitted}} / G_{{Rails}}$ |")
 
         jr = comp['jruby_compile_mode_ratio']
-        lines.append(f"| JRuby Compile Mode Speedup (Rails) | **{jr['rails'] or 'N/A'}** | $capacity_{{compile.mode=JIT}} / capacity_{{compile.mode=OFF}}$ |")
-        lines.append(f"| JRuby Compile Mode Speedup (Emitted) | **{jr['emitted'] or 'N/A'}** | $capacity_{{compile.mode=JIT}} / capacity_{{compile.mode=OFF}}$ |")
+        lines.append(f"| JRuby Compile Mode RPS Ratio (Rails) | **{jr['rails'] or 'N/A'}** | $RPS_{{compile.mode=JIT}} / RPS_{{compile.mode=OFF}}$ |")
+        lines.append(f"| JRuby Compile Mode RPS Ratio (Emitted) | **{jr['emitted'] or 'N/A'}** | $RPS_{{compile.mode=JIT}} / RPS_{{compile.mode=OFF}}$ |")
         lines.append(f"| **JRuby Interaction Ratio** | **{jr.get('interaction_ratio') or 'N/A'}** | $G_{{JRuby,emitted}} / G_{{JRuby,Rails}}$ |")
 
         sp = comp['spinel_system_comparison']
@@ -293,7 +300,7 @@ def generate_markdown_report(report_data):
     if report_data.get('trials'):
         checks = report_data.get('checks', {})
         lines.append('## 3. Individual Trial Dispositions and Execution Details\n')
-        lines.append('| Target | Endpoint | Rep | Status | Reason / Details | RPS | p50 (ms) | p95 (ms) | p99 (ms) | Err % | Peak RSS (MB) | CPU % |')
+        lines.append('| Target | Endpoint | Rep | Status | Reason / Details | RPS | p50 (ms) | p95 (ms) | p99 (ms) | Err % | Peak container memory (MB) | CPU % |')
         lines.append('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
         for t in report_data['trials']:
             tgt = t.get('target', '-')
@@ -332,7 +339,10 @@ def generate_markdown_report(report_data):
             err_cnt = m.get('requests_failed') if 'requests_failed' in m else m.get('errors', 0)
             err_str = f"{(err_cnt / tot) * 100:.2f}%" if tot > 0 and ('errors' in m or 'requests_failed' in m) else '-'
             telemetry = t.get('telemetry', {}).get('summary', {})
-            rss = f"{telemetry['peak_rss_bytes'] / (1024 * 1024):.2f}" if telemetry.get('peak_rss_bytes') else '-'
+            memory_bytes = telemetry.get('peak_container_memory_bytes')
+            if memory_bytes is None:
+                memory_bytes = telemetry.get('peak_rss_bytes')
+            rss = f"{memory_bytes / (1024 * 1024):.2f}" if memory_bytes is not None else '-'
             cpu = f"{telemetry['mean_cpu_pct']:.2f}%" if telemetry.get('mean_cpu_pct') else '-'
             lines.append(f"| `{tgt}` | `{ep}` | {rep} | {badge} | {reason} | {rps} | {p50} | {p95} | {p99} | {err_str} | {rss} | {cpu} |")
         lines.append('')
@@ -347,7 +357,7 @@ def generate_csv_report(report_data):
         'target', 'endpoint', 'is_eligible', 'valid_repetition_count',
         'rps_median', 'rps_min', 'rps_max', 'rps_iqr',
         'p50_ms_median', 'p95_ms_median', 'p99_ms_median',
-        'error_rate_median', 'peak_rss_mb_median', 'mean_cpu_pct_median', 'slo_met'
+        'error_rate_median', 'peak_container_memory_mb_median', 'mean_cpu_pct_median', 'slo_met'
     ])
     for item in report_data['target_aggregates']:
         writer.writerow([
@@ -363,7 +373,7 @@ def generate_csv_report(report_data):
             item['p95_ms']['median'],
             item['p99_ms']['median'],
             item['error_rate']['median'],
-            item['peak_rss_mb']['median'],
+            item['peak_container_memory_mb']['median'],
             item['mean_cpu_pct']['median'],
             item['slo_met'],
         ])
@@ -373,6 +383,9 @@ def build_report(output_dir, slo_p99_ms=DEFAULT_SLO_P99_MS, slo_error_rate=DEFAU
     """Main entrypoint to generate JSON, CSV, and Markdown report from raw artifacts."""
     root = Path(output_dir)
     checks, trials = parse_trials(root)
+    plan_path = root / 'plan.json'
+    profile = json.loads(plan_path.read_text(encoding='utf-8')).get('profile', {}) if plan_path.exists() else {}
+    fixed_offered_rate = profile.get('driver') == 'k6'
 
     # Determine targets and endpoints
     targets = sorted({t['target'] for t in trials} | set(checks.keys()))
@@ -389,11 +402,13 @@ def build_report(output_dir, slo_p99_ms=DEFAULT_SLO_P99_MS, slo_error_rate=DEFAU
 
     pairwise_comparisons = []
     for endpoint in endpoints:
-        pw = compute_pairwise_comparisons(target_aggregates, endpoint)
-        pairwise_comparisons.append(pw)
+        if not fixed_offered_rate:
+            pairwise_comparisons.append(compute_pairwise_comparisons(target_aggregates, endpoint))
 
     report_data = {
         'schema_version': 1,
+        'fixed_offered_rate': fixed_offered_rate,
+        'profile': profile,
         'slo_criteria': {'p99_ms': slo_p99_ms, 'error_rate': slo_error_rate},
         'target_aggregates': target_aggregates,
         'pairwise_comparisons': pairwise_comparisons,
@@ -409,18 +424,12 @@ def build_report(output_dir, slo_p99_ms=DEFAULT_SLO_P99_MS, slo_error_rate=DEFAU
     (root / 'summary.md').write_text(md_content, encoding='utf-8')
     (root / 'summary.csv').write_text(csv_content, encoding='utf-8')
     # Generate diagnostic report if diagnostic artifacts exist
-    try:
-        import diagnostic as p1_diag
-        p1_diag.build_diagnostic_report(root)
-    except Exception:
-        pass
+    import diagnostic as p1_diag
+    p1_diag.build_diagnostic_report(root)
 
     # Generate auxiliary evaluation report (startup, build, 4-core feasibility)
-    try:
-        import auxiliary as p2_aux
-        p2_aux.build_auxiliary_report(run_dir=root, output_path=root)
-    except Exception:
-        pass
+    import auxiliary as p2_aux
+    p2_aux.build_auxiliary_report(run_dir=root, output_path=root)
 
     return report_data
 

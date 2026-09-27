@@ -111,5 +111,25 @@ class ReportUnitTests(unittest.TestCase):
             self.assertIn('trials', data)
             self.assertEqual(len(data['trials']), 3)
 
+    def test_fixed_offered_rate_does_not_publish_capacity_ratios(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / 'preflight').mkdir()
+            (root / 'trials').mkdir()
+            (root / 'plan.json').write_text(json.dumps({'profile': {'driver': 'k6', 'offered_rps': 50}}))
+            (root / 'preflight/preflight.json').write_text(json.dumps({
+                name: {'eligible_endpoints': ['/articles']} for name in ('rails-cruby-off', 'emit-cruby-off')
+            }))
+            (root / 'trials/per-run.json').write_text(json.dumps([
+                {'target': name, 'endpoint': '/articles', 'repetition': 1, 'status': 'passed',
+                 'measurement': {'rps_successful': 50, 'latency_ms': {'p99': 4}, 'requests_total': 500,
+                                 'requests_failed': 0}}
+                for name in ('rails-cruby-off', 'emit-cruby-off')
+            ]))
+            data = report.build_report(root)
+            self.assertTrue(data['fixed_offered_rate'])
+            self.assertEqual(data['pairwise_comparisons'], [])
+            self.assertIn('does not establish maximum capacity', (root / 'summary.md').read_text())
+
 if __name__ == '__main__':
     unittest.main()

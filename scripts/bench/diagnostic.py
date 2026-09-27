@@ -61,6 +61,12 @@ def compute_ratio(num, denom):
     except (ValueError, TypeError, ZeroDivisionError):
         return None
 
+def container_memory_mb(telemetry):
+    value = telemetry.get('peak_container_memory_bytes')
+    if value is None:
+        value = telemetry.get('peak_rss_bytes')  # Historic docker stats artifact.
+    return round(value / (1024 * 1024), 1) if value is not None else None
+
 def analyze_warmup_trajectory(windows, p=None):
     """Analyze warmup progression: initial vs final RPS, latency convergence, time to stability."""
     if not windows:
@@ -158,7 +164,7 @@ def analyze_jruby_matrix(trials_by_target, endpoint):
                     'p95_ms': round(p95, 2) if p95 else None,
                     'p99_ms': round(p99, 2) if p99 else None,
                     'mean_cpu_pct': tel.get('mean_cpu_pct'),
-                    'peak_rss_mb': round(tel['peak_rss_bytes'] / (1024 * 1024), 1) if tel.get('peak_rss_bytes') else None,
+                    'peak_container_memory_mb': container_memory_mb(tel),
                     'compile_mode': end_diag.get('compile_mode'),
                     'jvm_compiler': end_diag.get('jvm_compiler'),
                     'jvm_compilation_time_ms': end_diag.get('jvm_compilation_time_ms'),
@@ -231,7 +237,7 @@ def analyze_cruby_matrix(trials_by_target, endpoint):
                     'p95_ms': round(p95, 2) if p95 else None,
                     'p99_ms': round(p99, 2) if p99 else None,
                     'mean_cpu_pct': tel.get('mean_cpu_pct'),
-                    'peak_rss_mb': round(tel['peak_rss_bytes'] / (1024 * 1024), 1) if tel.get('peak_rss_bytes') else None,
+                    'peak_container_memory_mb': container_memory_mb(tel),
                     'yjit_enabled': end_diag.get('yjit_enabled'),
                     'yjit_stats': end_diag.get('yjit_stats'),
                     'gc_stat': end_diag.get('gc_stat'),
@@ -278,6 +284,8 @@ def generate_diagnostic_markdown(data):
     lines.append('> **Instrumentation Overhead Active**: This diagnostic run was executed with diagnostic flags enabled (`--yjit-stats`, `-Xjit.logging=true`, `-J-Xlog:gc`, `-J-XX:+PrintCompilation`, and periodic MXBean sampling).')
     lines.append('> These instrumentation probes incur non-trivial CPU and memory overhead.')
     lines.append('> **DO NOT** mix diagnostic throughput / latency figures with production baseline benchmark rankings from `quick.yml` or `full.yml`.\n')
+    if data.get('fixed_offered_rate'):
+        lines.append('> Fixed offered RPS provides diagnostic response times and compiler state; capacity speedups and interaction ratios are unavailable without a rate sweep.\n')
 
     lines.append('> [!IMPORTANT]')
     lines.append('> **JRuby compile.mode=OFF vs JVM JIT**: `compile.mode=OFF` only instructs JRuby to interpret its IR/AST rather than emitting Java bytecode.')
@@ -428,6 +436,12 @@ def build_diagnostic_report(output_dir):
     for ep in endpoints:
         jruby_matrices.append(analyze_jruby_matrix(by_target, ep))
         cruby_matrices.append(analyze_cruby_matrix(by_target, ep))
+    fixed_offered_rate = profile.get('driver') == 'k6'
+    if fixed_offered_rate:
+        for matrix in jruby_matrices + cruby_matrices:
+            for field in ('jruby_speedup_g', 'yjit_speedup_g', 'roundhouse_speedup'):
+                if field in matrix:
+                    matrix[field] = {key: None for key in matrix[field]}
 
     # Analyze warmup progression for all trials
     warmup_trajectories = []
@@ -445,6 +459,7 @@ def build_diagnostic_report(output_dir):
 
     data = {
         'schema_version': 1,
+        'fixed_offered_rate': fixed_offered_rate,
         'profile': profile,
         'endpoints': endpoints,
         'jruby_matrices': jruby_matrices,

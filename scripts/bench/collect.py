@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Continuous container resource telemetry: CPU, RSS, cgroup memory peaks, and throttling."""
+"""Continuous container resource telemetry: CPU, memory, cgroup peaks, and throttling."""
 import argparse
 import json
 import re
@@ -44,13 +44,13 @@ def sample_container(container_name):
             return None
         raw = json.loads(proc.stdout.strip())
         mem_usage_parts = raw.get('MemUsage', '').split('/')
-        rss_bytes = parse_bytes(mem_usage_parts[0]) if mem_usage_parts else 0
+        container_memory_bytes = parse_bytes(mem_usage_parts[0]) if mem_usage_parts else 0
         limit_bytes = parse_bytes(mem_usage_parts[1]) if len(mem_usage_parts) > 1 else 0
 
         return {
             'timestamp': time.time(),
             'cpu_pct': parse_percent(raw.get('CPUPerc', '0%')),
-            'rss_bytes': rss_bytes,
+            'container_memory_bytes': container_memory_bytes,
             'limit_bytes': limit_bytes,
             'mem_pct': parse_percent(raw.get('MemPerc', '0%')),
             'pids': int(raw.get('PIDs', 0) or 0),
@@ -127,7 +127,7 @@ class ResourceCollector:
         cgroup = sample_cgroup(self.container_name)
 
         cpu_values = [s['cpu_pct'] for s in self.samples]
-        rss_values = [s['rss_bytes'] for s in self.samples]
+        memory_values = [s['container_memory_bytes'] for s in self.samples]
 
         cgroup_peak = int(cgroup['memory.peak']) if 'memory.peak' in cgroup and cgroup['memory.peak'].isdigit() else None
 
@@ -146,8 +146,10 @@ class ResourceCollector:
             'sample_count': len(self.samples),
             'mean_cpu_pct': round(sum(cpu_values) / len(cpu_values), 2) if cpu_values else 0.0,
             'peak_cpu_pct': round(max(cpu_values), 2) if cpu_values else 0.0,
-            'mean_rss_bytes': int(sum(rss_values) / len(rss_values)) if rss_values else 0,
-            'peak_rss_bytes': max(rss_values) if rss_values else 0,
+            'mean_container_memory_bytes': int(sum(memory_values) / len(memory_values)) if memory_values else None,
+            'peak_container_memory_bytes': max(memory_values) if memory_values else None,
+            'peak_rss_bytes': None,
+            'rss_unavailable_reason': 'Process RSS is not measured by docker stats MemUsage',
             'cgroup_peak_bytes': cgroup_peak,
             'throttled_periods': throttled_periods,
             'throttled_time_usec': throttled_time_usec,

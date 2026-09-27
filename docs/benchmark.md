@@ -133,7 +133,7 @@ python3 scripts/bench/report.py bench-results/run-01
 python3 scripts/bench/diagnostic.py bench-results/run-01
 ```
 出力成果物：
-- `summary.json`: 集計データ、SLO 達成状況、対比較倍率
+- `summary.json`: 集計データと SLO 判定。固定 offered RPS の k6 測定から容量倍率は算出しない
 - `summary.md`: GitHub Flavored Markdown 形式のレポートテーブル
 - `summary.csv`: 機械可読な全 endpoint メトリクス一覧
 - `diagnostics.md` / `diagnostics.json`: JIT 内部統計およびウォームアップ推移解析
@@ -143,6 +143,7 @@ python3 scripts/bench/diagnostic.py bench-results/run-01
 ## 5. 将来の GCE 移行計画と実行契約 (GCE Runbook)
 
 将来 GCE インスタンス上で本測定を実施する際の技術仕様および運用チェックリストです。
+`full.yml` は175試行で、ウォームアップ最小値と測定だけで14時間35分を要します。総予算は60時間に設定し、GitHub hosted Actions の実行選択肢から外しています。専用ホストで対象・endpointを絞る場合は `--targets` と別 profile を使い、計測条件を artifact に残してください。現在の CLI はアプリと k6 を同じホストで起動します。別ホスト負荷生成は未実装です。
 
 ### 5.1 推奨マシンタイプ
 - **`c3-standard-4`** (4 vCPU, 16 GB メモリ, Intel Xeon Sapphire Rapids)

@@ -19,7 +19,7 @@ Rails 版と AOT バイナリ版の挙動一致を自動判定する差分比較
 | **#7** | GitHub Actions 統合パイプライン | 完了 | Rails テスト、変換、AOT ビルド、差分比較、コンテナ検証を単一 CI で一貫実行 |
 | **#8** | 再現手順、比較結果、配布物の文書化 | 完了 | 本ドキュメントにて手順、制約、配布物の利用方法を完全記載 |
 | **#9** | AOT 実行用コンテナ | 完了 | マルチステージ Dockerfile、Ruby なし軽量イメージ、Volume による SQLite 永続化を検証 |
-| **#11〜#20** | ベンチマーク基盤・JIT 診断・初回測定公開 | 完了 | 7 構成の同一ジョブ逐次測定、Roundhouse 6.75x〜8.38x、YJIT 相互作用比 0.805、Spinel 16.09x を実証 |
+| **#11〜#20** | ベンチマーク基盤・JIT 診断・初回測定公開 | 予備測定 | 7 構成の同一ジョブ逐次 smoke 測定。倍率は各1回・10秒の観測値で、本測定と容量探索は未実施 |
 | **#21** | 4 コア・大規模データ・CRUD・起動・ビルド補助評価 | 完了 | 1,000 件 fixture・共通ページング、bench/k6/crud.js (90/10 mix)、初回業務応答時間 (Spinel 0.17s vs Rails 2.29s) を測定 |
 
 ---
@@ -191,9 +191,9 @@ Rails、Roundhouse 事前変換コード、Spinel AOT バイナリを同一の S
 
 ### 初回測定結果サマリー (`GET /articles`)
 
-GitHub Actions Hosted Runner（AMD EPYC 7763, 1 専有 vCPU）での実測値：
+GitHub Actions Hosted Runner 上の closed-loop smoke 測定（各構成1回・10秒、3記事 fixture）。専用物理コアの測定ではなく、以下の倍率は予備的な観測値です。測定用アプリは Rails 8.0.5.1 / JRuby 10.0.7.0 で、元の `blog/` の Rails 8.1.3.1 とは依存関係が異なります。
 
-| ターゲット | 実行スタック | スループット (RPS) | レイテンシ p50 | Peak RSS | 比較倍率 | 初回業務応答 (起動) |
+| ターゲット | 実行スタック | スループット (RPS) | レイテンシ p50 | コンテナメモリ最大 | 試行内の倍率 | 初回業務応答 (起動) |
 |---|---|---:|---:|---:|:---:|:---:|
 | `rails-cruby-off` | Rails 8 + Puma + CRuby (JIT Off) | 270.6 RPS | 14.55 ms | 109.3 MB | 基準 (1.0x) | 2.29 秒 |
 | `rails-cruby-yjit` | Rails 8 + Puma + CRuby (YJIT On) | 447.5 RPS | 8.66 ms | 133.6 MB | YJIT 1.65x | 2.87 秒 |
@@ -201,10 +201,9 @@ GitHub Actions Hosted Runner（AMD EPYC 7763, 1 専有 vCPU）での実測値：
 | `emit-cruby-yjit` | Roundhouse 変換 + Puma + CRuby (YJIT On) | 3,021.0 RPS | 1.29 ms | 50.2 MB | **Roundhouse 6.75x** (対 YJIT) | **0.70 秒 (4.1x 高速)** |
 | `spinel` | Spinel AOT 単一バイナリ (C-HTTP / DB) | 4,353.4 RPS | 0.89 ms | 12.5 MB | **全体スタック差 16.09x** | **0.17 秒 (13.5x 高速)** |
 
-- **Roundhouse 効果**: ルーティング、Rack ミドルウェア、ActiveRecord オブジェクト生成を平坦化することで 6.75x〜8.38x の加速と約 62% の省メモリ化を達成。
-- **JIT 相互作用比 ($I = 0.805$)**: 動的ディスパッチの多い Rails 側で YJIT 効果（+65%）が最大化され、平坦化済みの変換コード（+33%）では劣線形となる関係を特定。
-- **Spinel の位置付け**: 単なる Ruby-to-AOT の言語差ではなく、C 言語イベントループやネイティブ SQLite を含む全体スタック差として 16.09x を実証。
-- **補助評価 (#21)**: 初回業務応答（Spinel 0.17s / Emitted 0.70s / Rails 2.29s）、1,000 件 fixture・共通 20 件ページング、90/10 混在 CRUD シナリオ (`bench/k6/crud.js`)、および 4 コア条件の hosted runner 未実施理由（CPU 競合排除）を体系化。
+- **Roundhouse / YJIT**: この短い試行での処理量比は CRuby Off で 8.38、YJIT で 6.75、YJIT 相互作用比は 0.805。定常時の容量や内部機構は未検証です。
+- **Spinel**: 試行内の比は Rails CRuby Off に対し 16.09。HTTP サーバーと DB アダプターを含む実行系全体の比較です。
+- **補助評価 (#21)**: 1,000 件 fixture を作る補助関数と CRUD シナリオを用意しています。HTTP ページネーションは未実装で、CRUD 測定は書き込みの正確性ゲートが通るまで遮断します。
 
 ---
 

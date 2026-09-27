@@ -5,6 +5,7 @@
   "endpoints": ["/articles"],
   "driver": "k6",
   "k6_script": "bench/k6/crud.js",
+  "fixture_articles": 100,
   "offered_rps": 20,
   "cpu_count": 1, "memory_mb": 3072, "threads": 3, "spinel_workers": 1,
   "repetitions": 1, "seed": 20260924,

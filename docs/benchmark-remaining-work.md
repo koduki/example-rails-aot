@@ -57,35 +57,19 @@ Linux x86-64 + Docker の同じ CLI、コンテナ、結果 schema を維持す�
 
 将来の GCE 実行では CPU 世代、vCPU/SMT topology、専有性、OS/カーネル、disk/network、background load、クライアント余力を記録する。full の所要時間は「対象×endpoint×反復×（warmup 上限＋測定時間＋起動余裕）」から上限を見積もり、予算不足は限定実行として明示する。**GCE の VM 作成や専用機での測定はこの Issue に含めない。**
 
-## 5. 初回結果を出して再測定する：#20（完了）
+## 5. 初回予備測定：#20
 
-初回対比較、差異分析、および公開レポート作成は [docs/benchmark-results.md](benchmark-results.md) にて完了した。
-GitHub Actions 上で同一の測定ジョブ（Run ID: `36289166814`）により全 7 構成の逐次測定を実施し、以下を実証・記録した：
-- **Roundhouse 効果**: CRuby JIT Off で 8.38x、YJIT で 6.75x のスループット向上、Peak RSS の ~62% 削減。
-- **JIT 相互作用**: Rails YJIT 向上倍率 $G_{\text{Rails}} = 1.654x$、変換後 YJIT 向上倍率 $G_{\text{emitted}} = 1.332x$、相互作用比 $I = 0.805$。動的ディスパッチ除去による劣線形相互作用を特定。
-- **Spinel 全体スタック差**: Rails CRuby Off に対し 16.09x（4,353.4 RPS、12.5 MB RSS）。組み込み C-HTTP サーバー、ネイティブ SQLite C バインディングを含むアーキテクチャ差として明記。
-- **機能差異（Blocker）分類**: 読み取り 5 エンドポイント（GET /articles 等）の 100% 一致を確認。書き込み時のバリデーションエラー HTML（CSS クラス）、JSON エラー形式、不正 CSRF トークン受容の 3 件を Blocker として特定・記録。
-- **JRuby ウォームアップ特性**: 1 CPU 下では HotSpot C2 コンパイルの競合により 45 秒以内では収束途上（+506%）となることを解明。長時間のウォームアップ予算（quick/full: 60〜600秒）の必要性を確認。
+[初回結果](benchmark-results.md)は GitHub Actions Run `36289166814` の closed-loop smoke（各構成1回・10秒）として公開した。CRuby での Roundhouse / Rails の観測 RPS 比は JIT Off で 8.38、YJIT で 6.75、YJIT の相互作用比は 0.805、Spinel / Rails CRuby Off は 16.09 だった。定常性能の容量比や内部機構を実証した値ではない。JRuby emitted はウォームアップが未収束で比較から除外する。メモリ列はコンテナ使用量でありプロセス RSS ではない。
 
-## 6. 補助評価：#21（完了）
+preflight では5種類の読み取りが一致した。CSRF 不正トークン拒否、無効書き込みの HTML、JSON エラー形状には差異が残る。CRUD は書き込みの全ケースが適格になるまでランナーで遮断する。
 
-1 CPU の主比較が成立した後の拡張課題として、以下の補助評価基盤・設定・計測器を実装・配備完了した：
-- **4 コア条件のプロファイル整備と未実施理由の明確化**:
-  - `bench/profiles/quick-4core.yml`（4 CPU 専有、4,096 MB メモリ、CRuby 4 スレッド、JRuby 4 スレッド、Spinel 4 ワーカー）を策定。
-  - `scripts/bench/auxiliary.py` の `check_cpu_budget` により、標準 hosted runner（4 vCPU SMT）ではアプリ 4 CPU と負荷生成器の分離が不可能なため、相互競合を防ぐ目的で hosted runner での 4 コア測定を「理由付き未実施（将来 GCE 用）」として正しく判定・記録。
-- **大容量 fixture（1,000 記事 ＋ コメント）とページネーション**:
-  - `scripts/bench/prepare.py` をバッチ生成に対応させ、1,000 件記事およびコメントの fixture 生成と `fetch_page`（20 件単位ページング）を実装。
-- **CRUD 負荷シナリオ**:
-  - `bench/k6/crud.js` を作成。90% 読み取り / 10% 更新 mix、VU ごとの対象レコード分離（`targetId = 1 + ((__VU * 31 + __ITER) % numArticles)`）による SQLite ロック競合の回避、Bounded なデータ増加制御、および操作数と HTTP リクエスト数の分離集計を実装。
-  - `bench/profiles/crud.yml` を策定し、`scripts/bench/run.py` からの柔軟な k6 スクリプト指定に対応。
-- **起動時間・ビルドコスト補助計測**:
-  - `scripts/bench/auxiliary.py` を実装し、プロセス起動から最初の正常な業務応答（200 OK）までの所要時間を計測（Spinel: 0.17s, Emitted CRuby: 0.70s, Rails CRuby: 2.29s〜2.87s, Emitted JRuby: 11.38s, Rails JRuby: 28.73s）。
-  - バイナリフットプリント、コンテナイメージサイズ、およびキャッシュ特性を整理。
-- **テスト・レポート自動統合**:
-  - `scripts/bench/report.py` から `auxiliary.py` を自動連携し、`auxiliary.json` / `auxiliary.md` を出力。
-  - `tests/bench/test_auxiliary.py` を追加し、全 36 件の単体テストをパス。
+## 6. 補助評価の実装状況：#21
 
-## 完了判定
+- 4 CPU 設定を用意し、CRuby Puma は4 CPU 実行時に4ワーカーで起動する。hosted runner では負荷生成 CPU を分離できないため実測は未実施。
+- `prepare.py` は1,000記事を生成可能。`fetch_page` は fixture を検査する補助関数で、HTTP アプリにページングは実装していない。
+- CRUD k6 シナリオを用意した。各試行の fixture は `crud.yml` で100記事を指定し、ランナーは URL と記事数をスクリプトに渡す。測定は前述の正確性ゲートの修正後に実施する。
+- 起動時の業務応答、コンテナイメージサイズを補助レポートに記録する。ビルド時間・冷温キャッシュ差は別途実測が必要。
 
-親 Issue [#11](https://github.com/koduki/example-rails-aot/issues/11) に連なる全 Issue（#12〜#21）の実装・検証が完了した。
-同一環境の有効な HTML/JSON 対比較からレポートを再生成でき、実測 JIT 状態・機能一致・安定性・負荷生成器の余力を各値に結び付け、主測定と補助評価（4 コア未実施理由、CRUD mix、起動時間、ビルド特性）が完全に整理された。専用 GCE 機での最終的な本測定は、今後のインフラ運用フェーズとして独立して実行可能である。
+## 残る検証
+
+k6 を使った短時間 HTTP 実行を Docker 環境で確認し、一定 offered RPS の遅延・エラー・資源利用を比較する。容量倍率を算出するには複数負荷水準の探索と SLO 判定が必要である。`full.yml` の175試行は最短14時間35分かかるため、専用 GCE ホストで実行する。書き込み差異の解消と preflight 再実行後に CRUD を測る。プロセス RSS やクライアント CPU 余力の取得も残課題である。

@@ -31,6 +31,7 @@ export const options = {
     },
   },
   discardResponseBodies: false,
+  summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
 };
 
 function extractCsrfToken(html) {
@@ -105,11 +106,11 @@ export default function () {
       const createRes = http.post(`${baseUrl}/articles`, createPayload, {
         headers: defaultHeaders,
         timeout: timeout,
-        redirects: 5,
+        redirects: 0,
       });
 
-      const createdId = extractIdFromLocation(createRes.url);
-      let deleteOk = true;
+      const createdId = extractIdFromLocation(createRes.headers.Location || createRes.headers.location);
+      let deleteOk = false;
 
       if (createdId) {
         const deletePayload = {
@@ -119,16 +120,16 @@ export default function () {
         const delRes = http.post(`${baseUrl}/articles/${createdId}`, deletePayload, {
           headers: defaultHeaders,
           timeout: timeout,
-          redirects: 5,
+          redirects: 0,
         });
-        deleteOk = delRes.status === 200 || delRes.status === 302 || delRes.status === 303;
+        deleteOk = delRes.status === 302 || delRes.status === 303;
       }
 
       const elapsed = Date.now() - start;
       writeDuration.add(elapsed);
 
       const ok = check(createRes, {
-        'create status 200 or 302': (r) => r.status === 200 || r.status === 302 || r.status === 303,
+        'create redirect with id': (r) => (r.status === 302 || r.status === 303) && Boolean(createdId),
         'delete succeeded': () => deleteOk,
       });
 
@@ -157,15 +158,15 @@ export default function () {
       const patchRes = http.post(`${baseUrl}/articles/${targetId}`, updatePayload, {
         headers: defaultHeaders,
         timeout: timeout,
-        redirects: 5,
+        redirects: 0,
       });
 
       const elapsed = Date.now() - start;
       writeDuration.add(elapsed);
 
       const ok = check(patchRes, {
-        'update status 200 or redirect': (r) => r.status === 200 || r.status === 302 || r.status === 303,
-        'body rendered': (r) => r.body && r.body.length > 0,
+        'update redirects to article': (r) => (r.status === 302 || r.status === 303) &&
+          extractIdFromLocation(r.headers.Location || r.headers.location) === targetId,
       });
 
       if (ok) {
@@ -179,13 +180,12 @@ export default function () {
 
 export function handleSummary(data) {
   const metrics = data.metrics || {};
-  const duration = metrics.http_req_duration ? metrics.http_req_duration.values : {};
+  const latency = metrics.http_req_duration ? metrics.http_req_duration.values : {};
   const iterations = metrics.iterations ? metrics.iterations.values : {};
   const dropped = metrics.dropped_iterations ? metrics.dropped_iterations.values : { count: 0 };
   const vus = metrics.vus ? metrics.vus.values : {};
   const reqs = metrics.http_reqs ? metrics.http_reqs.values : {};
   const failed = metrics.http_req_failed ? metrics.http_req_failed.values : {};
-  const checks = metrics.check_failures ? metrics.check_failures.values : { count: 0 };
 
   const opsTotal = metrics.total_operations ? metrics.total_operations.values.count : 0;
   const opsSuccess = metrics.successful_operations ? metrics.successful_operations.values.count : 0;
@@ -195,7 +195,8 @@ export function handleSummary(data) {
   const readDur = metrics.read_duration_ms ? metrics.read_duration_ms.values : {};
   const writeDur = metrics.write_duration_ms ? metrics.write_duration_ms.values : {};
 
-  const testDurationSec = data.state && data.state.testRunDurationMs ? (data.state.testRunDurationMs / 1000) : 1;
+  const testDurationSec = data.state && data.state.testRunDurationMs
+    ? (data.state.testRunDurationMs / 1000) : Number.parseInt(duration, 10);
 
   const parsed = {
     driver: 'k6-crud',
@@ -203,6 +204,7 @@ export function handleSummary(data) {
     rate_offered: rate,
     target_url: baseUrl,
     duration_configured: duration,
+    elapsed: testDurationSec,
     vus_max_configured: maxVUs,
     vus_preallocated_configured: preAllocatedVUs,
     vus_peak: vus.max || 0,
@@ -212,6 +214,7 @@ export function handleSummary(data) {
     requests_total: reqs.count || 0,
     requests_successful: (reqs.count || 0) - (failed.passes || 0),
     requests_failed: failed.passes || 0,
+    errors: failed.passes || 0,
     operations: {
       total: opsTotal,
       successful: opsSuccess,
@@ -223,15 +226,17 @@ export function handleSummary(data) {
     },
     rps_effective: reqs.rate || 0,
     rps_successful: ((reqs.count || 0) - (failed.passes || 0)) / testDurationSec,
+    rps: ((reqs.count || 0) - (failed.passes || 0)) / testDurationSec,
+    p95_ms: latency['p(95)'] || 0,
     latency_ms: {
-      min: duration.min || 0,
-      avg: duration.avg || 0,
-      med: duration.med || 0,
-      p50: duration.med || 0,
-      p90: duration['p(90)'] || 0,
-      p95: duration['p(95)'] || 0,
-      p99: duration['p(99)'] || 0,
-      max: duration.max || 0,
+      min: latency.min || 0,
+      avg: latency.avg || 0,
+      med: latency.med || 0,
+      p50: latency.med || 0,
+      p90: latency['p(90)'] || 0,
+      p95: latency['p(95)'] || 0,
+      p99: latency['p(99)'] || 0,
+      max: latency.max || 0,
     },
     read_latency_ms: {
       min: readDur.min || 0,
@@ -256,6 +261,6 @@ export function handleSummary(data) {
   };
 
   return {
-    'summary.json': JSON.stringify(parsed, null, 2),
+    [__ENV.SUMMARY_PATH || 'summary.json']: JSON.stringify(parsed, null, 2),
   };
 }

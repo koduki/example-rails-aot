@@ -37,9 +37,11 @@ class GceContractTests(unittest.TestCase):
         # T_max = n_trials * (warmup_max + measurement + ready_timeout)
         per_trial_max_seconds = p['warmup_max_seconds'] + p['measurement_seconds'] + p['ready_timeout']
         estimated_max_seconds = n_trials * per_trial_max_seconds
-        # Verify total_timeout provides a sensible constraint (43200s = 12h)
-        self.assertEqual(p['total_timeout'], 43200)
-        self.assertGreater(estimated_max_seconds, p['total_timeout'])
+        # The full profile must fit even its maximum configured windows plus readiness.
+        self.assertEqual(p['total_timeout'], 216000)
+        self.assertGreaterEqual(p['total_timeout'], estimated_max_seconds)
+        minimum = n_trials * (p['warmup_min_seconds'] + p['measurement_seconds'])
+        self.assertGreaterEqual(p['total_timeout'], minimum)
 
     def test_env_file_loading_and_precedence(self):
         """Verify load_env_file parses key-value pairs and applies CLI overrides correctly."""

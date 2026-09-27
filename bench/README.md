@@ -1,11 +1,12 @@
-# Rails / Roundhouse / Spinel benchmark (P0)
+# Rails / Roundhouse / Spinel benchmark
 
 This directory provides a reproducible **pilot harness** for comparing what
 Roundhouse changes under CRuby YJIT and JRuby's own JIT, and for comparing the
 emitted program with Spinel AOT. It does not publish a performance ranking.
-The current load driver is closed loop; the open-arrival load design and final
-statistics belong to #16 and #17. Run the sustained experiment on dedicated
-GCE capacity when that work is complete.
+Smoke and quick use the closed-loop pilot driver. Diagnostic and full use k6
+constant arrival rate. A fixed offered rate compares latency, errors and
+resources at that load; capacity ratios require a separate rate sweep.
+Run the sustained full experiment on a dedicated host.
 
 ## Targets and compatibility
 
@@ -100,11 +101,12 @@ pairwise comparison reporting (`scripts/bench/report.py`).
 - **k6 Open-Arrival Rate**: Executes `constant-arrival-rate` scenarios against eligible endpoints.
   Tracks started, completed, successful, and dropped iterations. Trials with `dropped_iterations > 0`
   or saturated VUs are automatically labeled as `client_saturated` and excluded from valid capacity rankings.
-- **Resource Telemetry**: `collect.py` samples CPU percentage, RSS bytes, and cgroup v2 peak memory / CPU throttling
-  at 1-second intervals during trial execution, verifying client headroom and server constraints.
+- **Resource Telemetry**: `collect.py` samples CPU percentage and `docker stats` container memory
+  at 1-second intervals, plus cgroup v2 peak memory and CPU throttling. Process RSS is
+  unavailable in this collector and is recorded as `null` with a reason.
 - **Pairwise Comparison Report**: `report.py` reconstructs summary metrics without re-running servers, outputting
-  `summary.json`, `summary.csv`, and `summary.md`. Computes Roundhouse speedup ratios ($capacity_{emit} / capacity_{rails}$),
-  YJIT speedup factor ($G = capacity_{ON} / capacity_{OFF}$), the interaction ratio ($G_{emit} / G_{rails}$),
-  JRuby compile-mode speedup, and Spinel whole-system comparison.
+  `summary.json`, `summary.csv`, and `summary.md`. Closed-loop pilot runs report observed
+  throughput ratios. Fixed offered rate k6 runs report per-target metrics without
+  capacity ratios until a rate sweep establishes an SLO-compliant maximum for each target.
 - **Container Execution**: `scripts/run-bench-container.ps1` (PowerShell) and `scripts/run-bench-container.sh` (bash)
   allow running benchmark tests and CLI inside a Linux container to absorb host OS discrepancies.
