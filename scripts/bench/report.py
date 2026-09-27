@@ -72,6 +72,7 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
 
     valid_repetitions = []
     excluded_repetitions = []
+    verified_repetitions = []
 
     for t in matching:
         status = t.get('status')
@@ -83,6 +84,8 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
             continue
 
         if status != 'passed':
+            if status == 'verified':
+                verified_repetitions.append(t)
             excluded_repetitions.append({'repetition': t.get('repetition'),
                 'reason': reason or ('Functional smoke only; no convergence claim' if status == 'verified' else status)})
             continue
@@ -148,6 +151,7 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
         'endpoint': endpoint,
         'is_eligible': is_eligible,
         'valid_repetition_count': len(valid_repetitions),
+        'verified_repetition_count': len(verified_repetitions),
         'excluded_repetition_count': len(excluded_repetitions),
         'excluded_reasons': excluded_repetitions,
         'slo_met': slo_met,
@@ -256,7 +260,12 @@ def generate_markdown_report(report_data):
     for item in report_data['target_aggregates']:
         target = item['target']
         endpoint = item['endpoint']
-        status = '✅ passed' if item['is_eligible'] and item['valid_repetition_count'] > 0 else '❌ excluded'
+        if item['is_eligible'] and item['valid_repetition_count'] > 0:
+            status = '✅ passed'
+        elif item['is_eligible'] and item.get('verified_repetition_count', 0) > 0:
+            status = '✅ verified (functional only)'
+        else:
+            status = '❌ excluded'
         reps = f"{item['valid_repetition_count']}"
         rps = f"{item['rps']['median']}" if item['rps']['median'] is not None else '-'
         p50 = f"{item['p50_ms']['median']}" if item['p50_ms']['median'] is not None else '-'
@@ -318,7 +327,8 @@ def generate_markdown_report(report_data):
                 reason = reason or 'Ineligible endpoint (preflight failed)'
             elif raw_st != 'passed':
                 eff_st = raw_st
-                reason = reason or ('Warmup unstable' if raw_st == 'unstable' else raw_st)
+                reason = reason or ('Functional smoke only; no convergence claim' if raw_st == 'verified'
+                                    else 'Warmup unstable' if raw_st == 'unstable' else raw_st)
             elif m.get('client_saturated') or m.get('iterations_dropped', 0) > 0:
                 eff_st = 'excluded'
                 reason = 'Client saturated (dropped iterations)'
@@ -326,7 +336,8 @@ def generate_markdown_report(report_data):
                 eff_st = 'passed'
                 reason = '-'
 
-            badge = "✅ passed" if eff_st == 'passed' else ("⚠️ unstable" if eff_st == 'unstable' else f"❌ {eff_st}")
+            badge = ('✅ passed' if eff_st == 'passed' else '✅ verified' if eff_st == 'verified'
+                     else '⚠️ unstable' if eff_st == 'unstable' else f'❌ {eff_st}')
             lat = m.get('latency_ms', {})
             rps_val = m.get('rps_successful') or m.get('rps')
             rps = f"{rps_val:.2f}" if rps_val is not None else '-'
@@ -345,6 +356,10 @@ def generate_markdown_report(report_data):
                 memory_bytes = telemetry.get('peak_rss_bytes')
             rss = f"{memory_bytes / (1024 * 1024):.2f}" if memory_bytes is not None else '-'
             cpu = f"{telemetry['mean_cpu_pct']:.2f}%" if telemetry.get('mean_cpu_pct') else '-'
+            if eff_st == 'verified':
+                # Keep raw smoke metrics in JSON, but do not invite latency or
+                # throughput comparisons from short, unconverged CI trials.
+                rps = p50 = p95 = p99 = rss = cpu = '-'
             lines.append(f"| `{tgt}` | `{ep}` | {rep} | {badge} | {reason} | {rps} | {p50} | {p95} | {p99} | {err_str} | {rss} | {cpu} |")
         lines.append('')
 

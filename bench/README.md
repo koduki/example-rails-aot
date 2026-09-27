@@ -71,8 +71,11 @@ and trial dispositions without producing a performance ranking. Host SMT
 siblings and container cgroup cpuset/quota/throttling snapshots are recorded.
 A failed/interrupted process returns a nonzero exit status
 and records `failure.json`. Containers are removed on exit. GitHub Actions
-`benchmark-p0.yml` builds and runs correctness gates for all nine targets;
-the original AOT workflow is unchanged.
+`.github/workflows/benchmark.yml` builds and runs correctness gates for all
+nine targets. Its PR job also runs both short CRUD functional scenarios.
+Successful CRUD trials have status `verified` and do not contribute to the
+statistical performance summary. The AOT workflow separately checks the
+packaged binary and container after each push.
 
 ## Correctness gate and interpretation
 
