@@ -144,6 +144,22 @@ class SmokeProfileTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'results changed'):
                     run.reuse_preflight(path, ['rails-cruby-off'])
 
+    def test_preflight_action_writes_documented_result_and_manifest_paths(self):
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d) / 'checks'
+            checks = {'rails-cruby-off': {'eligible_endpoints': ['/articles']}}
+            args = ['run.py', 'preflight', '--profile', str(ROOT / 'bench/profiles/smoke.yml'),
+                    '--targets', 'rails-cruby-off', '--output', str(output),
+                    '--app-cpus', '0', '--load-cpus', '1']
+            def fake_preflight(names, directory, profile, cpus):
+                run.save(directory / 'preflight.json', checks)
+                return checks
+            with patch.object(sys, 'argv', args), patch('run.preflight', side_effect=fake_preflight), \
+                 patch('run.preflight_identity', return_value={'image_ids': {'app': 'sha256:fixed'}}):
+                self.assertEqual(run.main(), 0)
+                self.assertEqual(run.reuse_preflight(output / 'preflight.json', ['rails-cruby-off']), checks)
+            self.assertFalse((output / 'preflight/preflight.json').exists())
+
     def test_report_failure_marks_run_failed(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

@@ -666,8 +666,9 @@ def main():
                 shutil.copyfile(reused.with_name('preflight-manifest.json'),
                                 output / 'preflight/preflight-manifest.json')
             else:
-                checks = preflight(p['targets'],output/'preflight',p,cpus)
-                save_preflight_manifest(output/'preflight/preflight.json', p['targets'])
+                checks_dir = output if args.action == 'preflight' else output/'preflight'
+                checks = preflight(p['targets'],checks_dir,p,cpus)
+                save_preflight_manifest(checks_dir/'preflight.json', p['targets'])
             if args.action == 'run' and p.get('k6_script') == 'bench/k6/crud.js':
                 missing = crud_gate(checks, p['targets'], p.get('crud_scenario', 'mix'))
                 if missing:
