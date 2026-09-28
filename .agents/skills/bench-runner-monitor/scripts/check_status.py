@@ -192,6 +192,11 @@ def inspect():
             if os.path.exists(progress_file):
                 with open(progress_file) as f:
                     res["progress"] = json.load(f)
+        if curr_trial:
+            last_file = os.path.join(trials_dir, curr_trial, "last-step.json")
+            if os.path.exists(last_file):
+                with open(last_file) as f:
+                    res["last_step"] = json.load(f)
         res["trials"] = {
             "total_directories": len(all_entries),
             "completed_count": len(completed_trials),
@@ -289,6 +294,11 @@ def collect_local(results_dir: Optional[str] = None) -> Dict[str, Any]:
             progress_file = trials_dir / curr_trial / "progress.json"
             if progress_file.exists():
                 res["progress"] = json.loads(progress_file.read_text())
+
+        if curr_trial:
+            last_file = trials_dir / curr_trial / "last-step.json"
+            if last_file.exists():
+                res["last_step"] = json.loads(last_file.read_text())
 
         res["trials"] = {
             "total_directories": len(all_entries),
@@ -435,6 +445,9 @@ def render_report(data: Dict[str, Any]) -> str:
         if data.get("progress"):
             progress = data["progress"]
             lines.append(f"- **Phase**: `{progress.get('phase')}`; repetition {progress.get('repetition')}; rate {progress.get('rate', '—')} RPS; step {progress.get('step', '—')}")
+        if data.get("last_step"):
+            m = data["last_step"].get("measurement", {})
+            lines.append(f"- **Last Step**: tester CPU {m.get('tester_cpu_pct', '—')}%; dropped {m.get('iterations_dropped', '—')}; saturated {m.get('client_saturated', '—')}")
         if data.get("tester"):
             tester = data["tester"]
             lines.append(f"- **Tester k6**: `{tester.get('k6_cmd') or 'idle'}`")

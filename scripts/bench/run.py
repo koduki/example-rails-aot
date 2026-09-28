@@ -588,6 +588,7 @@ def trials(p, cpus, output, checks):
                                 result = capacity.search(measure, p)
                                 save(directory / 'capacity-search.json', result)
                                 row['capacity_rps'] = result['capacity_rps']
+                                row['offered_rps'] = result['offered_rps']
                                 row['capacity_steps'] = steps_seen
                                 measured = result['measurement']
                             else:

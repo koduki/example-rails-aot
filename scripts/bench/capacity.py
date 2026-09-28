@@ -51,7 +51,7 @@ def search(measure, profile):
     measured = measure(low, profile['measurement_seconds'], 'confirm')
     state = decision(measured, profile)
     steps.append({'phase': 'confirm', 'rate': low, 'decision': state, 'measurement': measured})
-    return {'capacity_rps': low if state == 'pass' else None,
+    return {'offered_rps': low, 'capacity_rps': measured.get('rps_successful') if state == 'pass' else None,
             'measurement': measured, 'steps': steps, 'status': state}
 
 

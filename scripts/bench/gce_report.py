@@ -70,14 +70,14 @@ def generate(root):
         fmt = lambda x: f'{x:.2f}' if x is not None else '—'
         lines.append(f'| `{target}` | {len(good)}/{profile["repetitions"]} | {fmt(statistics.median(capacities) if complete else None)} | {fmt(max(p99s) if p99s else None)} | {fmt(max(errors) if errors else None)} | {fmt(statistics.mean(cpu) if cpu else None)} | {fmt(max(memory) if memory else None)} | {f"{min(warmup):.0f}–{max(warmup):.0f}" if warmup else "—"} |')
     lines += ['', '## All repetitions', '',
-              '| Target | Rep | Status | Capacity RPS | Confirm p99 ms | Error % | App CPU % | Memory MB | Warmup s |',
-              '| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |']
+              '| Target | Rep | Status | Sustained RPS | Offered RPS | Confirm p99 ms | Error % | App CPU % | Memory MB | Warmup s |',
+              '| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
     for r in rows:
         m = r.get('measurement', {})
         tele = r.get('telemetry', {}).get('summary', {})
         cpu_pct = tele.get('mean_cpu_pct', '—')
         mem_mb = round(tele['peak_container_memory_bytes'] / 1048576, 2) if tele.get('peak_container_memory_bytes') is not None else '—'
-        lines.append(f'| `{r["target"]}` | {r["repetition"]} | {r["status"]} | {r.get("capacity_rps", "—")} | {m.get("latency_ms", {}).get("p99", "—")} | {round(100*m.get("requests_failed", 0)/max(1,m.get("requests_total",0)), 3) if m else "—"} | {cpu_pct} | {mem_mb} | {round(r.get("warmup_seconds", 0))} |')
+        lines.append(f'| `{r["target"]}` | {r["repetition"]} | {r["status"]} | {r.get("capacity_rps", "—")} | {r.get("offered_rps", "—")} | {m.get("latency_ms", {}).get("p99", "—")} | {round(100*m.get("requests_failed", 0)/max(1,m.get("requests_total",0)), 3) if m else "—"} | {cpu_pct} | {mem_mb} | {round(r.get("warmup_seconds", 0))} |')
     lines += ['', '## Paired capacity ratios', '', '| Numerator / denominator | Median | Min | Max | IQR | Per repetition |', '| --- | ---: | ---: | ---: | ---: | --- |']
     for key, result in pairs.items():
         per_rep = ', '.join(f"{entry['repetition']}: {entry['ratio']:.3f}" for entry in result['pairs'])

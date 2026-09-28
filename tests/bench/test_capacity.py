@@ -1,4 +1,6 @@
 import sys
+import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -6,6 +8,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/bench'))
 import capacity
+import gce_report
 from loadgen import RemoteLoadGenerator, remote_command, remote_copy
 import run
 
@@ -52,6 +55,34 @@ class CapacityTests(unittest.TestCase):
         pairs = capacity.paired_ratios(rows, 'emit-cruby-off', 'rails-cruby-off')
         self.assertEqual([p['ratio'] for p in pairs['pairs']], [2, 1.5])
         self.assertEqual(pairs['median'], 1.75)
+
+    def test_formal_report_uses_all_repetitions_and_worst_latency(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'trials').mkdir()
+            (root / 'preflight').mkdir()
+            profile = dict(self.profile, capacity_search=True, targets=['rails-cruby-off'],
+                           endpoints=['/articles?page=1'], fixture_articles=1000,
+                           repetitions=5, gce_zone='zone', remote_loadgen='tester', target_host='10.0.0.1')
+            (root / 'plan.json').write_text(json.dumps({'profile': profile}))
+            (root / 'env.json').write_text(json.dumps({'git_commit': 'source-sha'}))
+            (root / 'preflight/preflight.json').write_text(json.dumps({
+                'rails-cruby-off': {'status': 'passed', 'eligible_endpoints': ['/articles?page=1']}}))
+            rows = [{'target': 'rails-cruby-off', 'endpoint': '/articles?page=1', 'repetition': i,
+                     'status': 'passed', 'capacity_rps': 100 + i,
+                     'warmup_seconds': 180 + i,
+                     'measurement': {'requests_total': 1000, 'requests_failed': 0,
+                                     'latency_ms': {'p99': 90 if i == 5 else 20}}}
+                    for i in range(1, 6)]
+            (root / 'trials/per-run.json').write_text(json.dumps(rows))
+            gce_report.generate(root)
+            report = (root / 'gce-summary.md').read_text()
+            self.assertIn('90.00', report)  # Worst repetition, not median p99.
+            self.assertIn('103.00', report)  # Median sustainable RPS.
+            rows[-1]['status'] = 'failed'
+            (root / 'trials/per-run.json').write_text(json.dumps(rows))
+            gce_report.generate(root)
+            self.assertIn('4/5 | —', (root / 'gce-summary.md').read_text())
 
     def test_remote_command_uses_private_network_and_isolation(self):
         ssh = remote_command('bench-loadgen-c3', 'asia-northeast1-b', 'demo', 'k6 version')
