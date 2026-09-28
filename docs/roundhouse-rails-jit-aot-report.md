@@ -25,12 +25,12 @@ JIT を On にすると**絶対 RPS は両方のアプリ形状で上がる**。
 
 ~~~mermaid
 flowchart TD
-    A["blog/: Rails 8.0.5.1<br/>記事・コメント、CSRF検証無効"] --> B["AOT経路: Roundhouse<br/>Ingest → Analyze → Lower → Emit"]
-    A --> C["測定経路: 派生コピー<br/>JRuby依存・資源設定・fixture"]
-    B --> D["生成 Ruby<br/>CRuby / JRuby"]
-    B --> E["Spinel → C → ネイティブ<br/>専用 HTTP / DB ランタイム"]
-    C --> F["元 Rails<br/>CRuby / JRuby"]
-    D --> G["HTTP/DB 正確性ゲート<br/>同一 workload の測定"]
+    A["blog/: Rails 8.0.5.1、CSRF無効"] --> B["AOT経路: Roundhouse"]
+    A --> C["測定経路: 派生コピー"]
+    B --> D["生成 Ruby: CRuby / JRuby"]
+    B --> E["Spinel → C → ネイティブ"]
+    C --> F["元 Rails: CRuby / JRuby"]
+    D --> G["HTTP / DB 正確性ゲートと測定"]
     E --> G
     F --> G
 ~~~

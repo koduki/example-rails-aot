@@ -30,6 +30,9 @@ def prepare(destination):
     source_gemfile = (ROOT / 'blog/Gemfile').read_text()
     if 'gem "rails", "8.0.5.1"' not in source_gemfile:
         raise ValueError('Canonical fixture must use Rails 8.0.5.1')
+    source_application = (ROOT / 'blog/config/application.rb').read_text()
+    if 'config.action_controller.allow_forgery_protection = false' not in source_application:
+        raise ValueError('Canonical fixture must disable CSRF verification')
     boot = destination / 'config/boot.rb'
     boot.write_text(boot.read_text().replace('require "bootsnap/setup"', '# Bootsnap disabled for both runtimes'))
     for source, target in [('production.rb', 'config/environments/production.rb'),
