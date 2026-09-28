@@ -73,6 +73,9 @@ def config(path):
         raise ValueError('Invalid warmup window policy')
     if any(not 0 < p[k] < 1 for k in ('max_cv', 'max_drift')):
         raise ValueError('Invalid stability tolerance')
+    for key in ('warmup_max_error_rate', 'max_error_rate'):
+        if key in p and (type(p[key]) not in (int, float) or not 0 <= p[key] < 1):
+            raise ValueError(f'Invalid error rate limit: {key}')
     if not p['endpoints'] or set(p['endpoints']) - set(READS):
         raise ValueError('Unknown/empty endpoints')
     select(p['targets'])
@@ -132,7 +135,9 @@ def stable(windows, p):
     if len(windows) < n:
         return False
     rows = windows[-n:]
-    if any(r['errors'] or r['rps'] <= 0 or not r['p95_ms'] for r in rows):
+    if any(r['rps'] <= 0 or not r['p95_ms'] or
+           r['errors'] / max(1, r.get('requests_total', r.get('successful', 0) + r['errors'])) >
+           p.get('warmup_max_error_rate', 0) for r in rows):
         return False
     for key in ('rps', 'p95_ms'):
         values = [r[key] for r in rows]

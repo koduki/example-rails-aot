@@ -227,6 +227,19 @@ observations; passing convergence does not establish maximum capacity, a
 guaranteed JRuby compiler phase, or a causal JIT speedup. Read the measured
 `warmup.json`, runtime probe, and trial status before interpreting ratios.
 
+The first strict pilot ([Actions run 36353784020](https://github.com/koduki/example-rails-aot/actions/runs/36353784020))
+found 8 `unstable` and 4 `passed` trials. Several JRuby streams had steady
+throughput and p95 late in their 600-second warmup but a few HTTP errors in
+every window; the former gate required *zero* errors per window and therefore
+could not declare convergence. The driver now retries an idempotent GET once
+after a transport exception and records `transport_retries` and `error_types`.
+The pilot accepts at most 0.5% failed warmup requests in each stability window;
+timed requests must stay below 0.1% failures. Non-200 responses remain errors.
+The report requires all three valid repetitions for each target before
+publishing a pairwise ratio, and marks partial series incomplete. These
+thresholds are an orchestration pilot policy, not evidence of an error-free
+application or an SLO-compliant production service.
+
 The 2026-09-27 PR run at [Actions run 36307291456](https://github.com/koduki/example-rails-aot/actions/runs/36307291456)
 finished with 7 `passed` read/update trials and 4 `passed` plus 3 `unstable`
 create/delete trials, despite zero HTTP failures or dropped iterations. Its

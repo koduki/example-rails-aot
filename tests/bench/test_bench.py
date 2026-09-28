@@ -99,6 +99,13 @@ class BenchmarkTests(unittest.TestCase):
         rows[-1]['rps']=100; rows[-1]['errors']=1
         self.assertFalse(run.stable(rows,p))
 
+    def test_jruby_warmup_tolerates_sparse_errors_but_rejects_high_rate(self):
+        p=run.config(ROOT/'bench/profiles/ci-jruby-convergence.yml')
+        rows=[{'rps':100, 'p95_ms':5, 'errors':2, 'requests_total':1000} for _ in range(4)]
+        self.assertTrue(run.stable(rows,p))
+        rows[-1]['errors']=6
+        self.assertFalse(run.stable(rows,p))
+
     def test_source_copy_does_not_mutate_original(self):
         before=prepare_app.tree_hash(ROOT/'blog')
         with tempfile.TemporaryDirectory() as d:
