@@ -117,7 +117,7 @@ jobs:
             TARGETS_VAL="${{ inputs.targets }}"
             SEED_VAL="${{ inputs.seed }}"
           else
-            PROFILE_NAME="smoke"
+            PROFILE_NAME="quick-gate"
             PROFILE_PATH="bench/profiles/smoke.yml"
             TARGETS_VAL=""
             SEED_VAL="20260924"
