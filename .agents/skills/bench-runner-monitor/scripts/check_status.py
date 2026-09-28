@@ -102,6 +102,18 @@ def inspect():
                 "name": parts[3] if len(parts) > 3 else ""
             })
 
+    app_metrics = None
+    if active_containers:
+        name = active_containers[0]["name"]
+        try:
+            stats = subprocess.run(["docker", "stats", "--no-stream", "--format", "{{json .}}", name], capture_output=True, text=True, timeout=5)
+            port = subprocess.run(["docker", "port", name, "3000/tcp"], capture_output=True, text=True, timeout=5)
+            cpu_stat = subprocess.run(["docker", "exec", name, "cat", "/sys/fs/cgroup/cpu.stat"], capture_output=True, text=True, timeout=5)
+            app_metrics = {"stats": json.loads(stats.stdout) if stats.returncode == 0 and stats.stdout.strip() else {},
+                           "port": port.stdout.strip(), "cpu_stat": cpu_stat.stdout.strip()}
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+
     # Search for candidate result directories
     home_dir = os.path.expanduser("~")
     search_paths = [
@@ -126,6 +138,7 @@ def inspect():
         "driver_cmd": driver_proc,
         "k6_cmd": k6_proc,
         "active_containers": active_containers,
+        "app_metrics": app_metrics,
         "results_dir": target_dir,
         "timestamp": time.time()
     }
@@ -445,6 +458,13 @@ def render_report(data: Dict[str, Any]) -> str:
         if data.get("progress"):
             progress = data["progress"]
             lines.append(f"- **Phase**: `{progress.get('phase')}`; repetition {progress.get('repetition')}; rate {progress.get('rate', '—')} RPS; step {progress.get('step', '—')}")
+        if data.get("app_metrics"):
+            metrics = data["app_metrics"]
+            stats = metrics.get("stats", {})
+            lines.append(f"- **App**: CPU {stats.get('CPUPerc', '—')}; memory {stats.get('MemUsage', '—')}; port {metrics.get('port', '—')}")
+            throttled = next((line for line in metrics.get('cpu_stat', '').splitlines() if line.startswith('nr_throttled ')), None)
+            if throttled:
+                lines.append(f"- **App Throttle**: {throttled}")
         if data.get("last_step"):
             m = data["last_step"].get("measurement", {})
             lines.append(f"- **Last Step**: tester CPU {m.get('tester_cpu_pct', '—')}%; dropped {m.get('iterations_dropped', '—')}; saturated {m.get('client_saturated', '—')}")

@@ -1,9 +1,10 @@
 {
   "schema_version": 1,
-  "description": "GCE two-VM c3-standard-4 capacity experiment; results require all repetitions",
+  "description": "GCE two-VM c3-standard-4 capacity experiment; app-sliced-page20-1000 alternative because Roundhouse Spinel lacks offset; results require all repetitions",
   "targets": ["rails-cruby-off", "rails-cruby-yjit", "rails-jruby-off", "rails-jruby", "emit-cruby-off", "emit-cruby-yjit", "emit-jruby-off", "emit-jruby", "spinel"],
   "endpoints": ["/articles?page=1"],
   "fixture_articles": 1000,
+  "workload_name": "app-sliced-page20-1000",
   "cpu_count": 4, "memory_mb": 14336, "threads": 4, "spinel_workers": 4,
   "repetitions": 5, "seed": 20260928,
   "warmup_min_seconds": 180, "warmup_max_seconds": 900,
