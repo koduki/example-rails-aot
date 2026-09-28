@@ -161,10 +161,14 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
     cpu_summary = summarize_series(cpu_list)
     memory_summary = summarize_series(container_mb_list)
 
-    # Check SLO compliance based on median of repetition p99s and error rates
-    slo_met = False
-    if p99_summary['median'] is not None and err_summary['median'] is not None:
-        slo_met = (p99_summary['median'] <= slo_p99_ms) and (err_summary['median'] < slo_error_rate)
+    # Fail if any repetition violates SLO; a median must not hide an outlier.
+    per_repetition_slo = [
+        {'repetition': trial['repetition'], 'passed': p99 <= slo_p99_ms and err < slo_error_rate,
+         'p99_ms': p99, 'error_rate': err}
+        for trial, p99, err in zip(valid_repetitions, p99_list, error_rate_list)
+    ]
+    slo_met = (len(per_repetition_slo) >= required_repetitions and
+               all(item['passed'] for item in per_repetition_slo))
 
     return {
         'target': target,
@@ -179,6 +183,9 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
         'excluded_repetition_count': len(excluded_repetitions),
         'excluded_reasons': excluded_repetitions,
         'slo_met': slo_met,
+        'per_repetition_slo': per_repetition_slo,
+        'worst_p99_ms': max(p99_list) if p99_list else None,
+        'worst_error_rate': max(error_rate_list) if error_rate_list else None,
         'rps': rps_summary,
         'p50_ms': p50_summary,
         'p95_ms': p95_summary,

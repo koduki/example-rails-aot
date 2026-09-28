@@ -43,3 +43,16 @@ resource "google_project_iam_member" "runner_roles" {
   role    = each.key
   member  = "serviceAccount:${google_service_account.bench_runner.email}"
 }
+
+# The app VM orchestrates the tester over private SSH using its attached identity.
+resource "google_project_iam_member" "app_to_loadgen" {
+  for_each = toset(["roles/compute.osLogin", "roles/compute.viewer"])
+  project  = var.project_id
+  role     = each.key
+  member   = "serviceAccount:${google_service_account.bench_runner.email}"
+}
+resource "google_service_account_iam_member" "runner_actas_self" {
+  service_account_id = google_service_account.bench_runner.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.bench_runner.email}"
+}

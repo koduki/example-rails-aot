@@ -1,0 +1,6 @@
+# Copy to an ignored local tfvars file. The network, subnet and NAT already exist.
+project_id      = "YOUR_PROJECT_ID"
+network_name    = "YOUR_EXISTING_VPC"
+subnetwork_name = "YOUR_EXISTING_SUBNET"
+region          = "asia-northeast1"
+zone            = "asia-northeast1-b"

@@ -3,7 +3,8 @@ class ArticlesController < ApplicationController
 
   # GET /articles or /articles.json
   def index
-    @articles = Article.includes(:comments).order(created_at: :desc)
+    page = [params.fetch(:page, 1).to_i, 1].max
+    @articles = Article.includes(:comments).order(created_at: :desc, id: :desc).limit(20).offset((page - 1) * 20)
   end
 
   # GET /articles/1 or /articles/1.json

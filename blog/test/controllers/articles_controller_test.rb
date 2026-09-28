@@ -14,6 +14,21 @@ class ArticlesControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "index returns the first twenty articles in stable order" do
+    25.times do |i|
+      Article.create!(title: "Page article #{i}", body: "A sufficiently long body for validation.")
+    end
+    expected = Article.order(created_at: :desc, id: :desc).limit(20).pluck(:title)
+    get articles_url(page: 1)
+    assert_response :success
+    assert_equal expected, css_select("#articles h2 a").map(&:text)
+
+    get articles_url(page: 2)
+    assert_response :success
+    assert_equal Article.order(created_at: :desc, id: :desc).offset(20).limit(20).pluck(:title),
+                 css_select("#articles h2 a").map(&:text)
+  end
+
   test "should get new" do
     get new_article_url
     assert_response :success

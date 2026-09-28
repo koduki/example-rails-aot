@@ -14,10 +14,28 @@ provider "google" {
   zone    = var.zone
 }
 
-# Dedicated GCE instance for benchmark execution
-resource "google_compute_instance" "bench_runner" {
-  name         = var.instance_name
-  machine_type = var.machine_type
+data "google_compute_network" "existing" {
+  name    = var.network_name
+  project = var.project_id
+}
+
+data "google_compute_subnetwork" "existing" {
+  name    = var.subnetwork_name
+  region  = var.region
+  project = var.project_id
+}
+
+locals {
+  roles = {
+    app     = { name = "bench-app-c3", tag = "bench-app", startup = "startup-app.sh" }
+    loadgen = { name = "bench-loadgen-c3", tag = "bench-loadgen", startup = "startup-loadgen.sh" }
+  }
+}
+
+resource "google_compute_instance" "bench" {
+  for_each     = local.roles
+  name         = each.value.name
+  machine_type = "c3-standard-4"
   zone         = var.zone
 
   boot_disk {
@@ -28,29 +46,17 @@ resource "google_compute_instance" "bench_runner" {
     }
   }
 
-  # Completely private interface (no external IP / access_config block omitted)
-  # Uses existing default VPC and Cloud NAT for outbound traffic
   network_interface {
-    network    = "default"
-    subnetwork = "default"
+    network    = data.google_compute_network.existing.self_link
+    subnetwork = data.google_compute_subnetwork.existing.self_link
+    # No access_config: outbound uses the existing Cloud NAT.
   }
 
-  # OS Login enabled for centralized IAM-based SSH management
-  metadata = {
-    enable-oslogin = "TRUE"
-  }
-
-  metadata_startup_script = file("${path.module}/startup.sh")
-
+  metadata = { enable-oslogin = "TRUE" }
+  metadata_startup_script = file("${path.module}/${each.value.startup}")
   service_account {
     email  = google_service_account.bench_runner.email
     scopes = ["cloud-platform"]
   }
-
-  tags = ["bench-node"]
-
-  # Protect against accidental deletion during active measurements
-  lifecycle {
-    create_before_destroy = false
-  }
+  tags = [each.value.tag]
 }

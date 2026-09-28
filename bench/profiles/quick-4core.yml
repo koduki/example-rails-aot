@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "4-core auxiliary comparison profile for dedicated VM or GCE execution (requires at least 4 app CPUs + distinct load generator CPUs)",
+  "description": "4-core auxiliary pilot on a host with additional distinct load-generator CPUs; c3-standard-4 needs a separate tester VM",
   "targets": ["rails-cruby-off", "rails-cruby-yjit", "emit-cruby-off", "emit-cruby-yjit", "rails-jruby", "emit-jruby", "spinel"],
   "endpoints": ["/articles", "/articles.json"],
   "cpu_count": 4, "memory_mb": 4096, "threads": 4, "spinel_workers": 4,

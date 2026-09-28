@@ -1,5 +1,13 @@
 name: Benchmark Pipeline
 on:
+  push:
+    paths:
+      - "bench/**"
+      - "scripts/bench/**"
+      - "tests/bench/**"
+      - "blog/**"
+      - "infra/terraform/**"
+      - ".github/workflows/benchmark.yml"
   pull_request:
     paths:
       - 'blog/**'
@@ -7,6 +15,7 @@ on:
       - 'bench/**'
       - 'scripts/bench/**'
       - 'tests/bench/**'
+      - 'infra/terraform/**'
       - '.dockerignore'
       - 'scripts/aot/transpile.sh'
       - 'scripts/aot/prepare-assets.sh'
@@ -53,7 +62,16 @@ jobs:
 
       - name: Unit and CLI contract tests
         run: |
-          python3 -m unittest discover -s tests/bench -v
+          mkdir -p bench-results
+          if python3 -m unittest discover -s tests/bench -v > bench-results/unit.log 2>&1; then
+            echo '{"status":"passed"}' > bench-results/unit-status.json
+          else
+            echo '{"status":"failed"}' > bench-results/unit-status.json
+            cat bench-results/unit.log
+            exit 1
+          fi
+          cat bench-results/unit.log
+          python3 scripts/bench/run.py run --profile bench/profiles/gce-c3-capacity.yml --remote-loadgen bench-loadgen-c3 --gce-project PROJECT_ID --gce-zone asia-northeast1-b --target-host APP_PRIVATE_IP --app-cpus 0,1,2,3 --dry-run > benchmark-plan-gce-c3.json
           python3 scripts/bench/run.py run --profile bench/profiles/smoke.yml --dry-run > benchmark-plan-smoke.json
           python3 scripts/bench/run.py run --profile bench/profiles/quick.yml --dry-run > benchmark-plan-quick.json
           python3 scripts/bench/run.py run --profile bench/profiles/ci-jruby-convergence.yml --dry-run > benchmark-plan-ci-jruby-convergence.json
@@ -61,6 +79,19 @@ jobs:
           python3 scripts/bench/run.py run --profile bench/profiles/full.yml --dry-run > benchmark-plan-full.json
           python3 scripts/bench/run.py run --profile bench/profiles/crud.yml --dry-run > benchmark-plan-crud.json
           python3 scripts/bench/run.py run --profile bench/profiles/crud-create-delete.yml --dry-run > benchmark-plan-crud-create-delete.json
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.8'
+
+      - name: Validate two-VM Terraform
+        run: |
+          if (cd infra/terraform && terraform fmt -check && terraform init -backend=false && terraform validate); then
+            echo '{"status":"passed"}' > bench-results/terraform-status.json
+          else
+            echo '{"status":"failed"}' > bench-results/terraform-status.json
+            exit 1
+          fi
 
       - name: Configure benchmark parameters
         id: config
@@ -122,37 +153,11 @@ jobs:
             --preflight-file bench-results/preflight/preflight.json \
             --output bench-results/crud-create-delete
 
-      - name: Publish Step Summary report
+      - name: Publish CI verification report
         if: always()
         run: |
-          if [ -f bench-results/measurement/summary.md ]; then
-            cat bench-results/measurement/summary.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-          if [ -f bench-results/measurement/diagnostics.md ]; then
-            cat bench-results/measurement/diagnostics.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          from pathlib import Path
-          for scenario in ('crud', 'crud-create-delete'):
-              path = Path('bench-results') / scenario / 'report.json'
-              if path.exists():
-                  data = json.loads(path.read_text())
-                  print(f'\n### {scenario}: functional smoke only')
-                  print(f"Trial statuses: {data.get('trial_status_counts', {})}")
-                  print(f"Database and HTTP verified: {data.get('verified_smoke_trials', 0)}")
-                  if data.get('invalid_trials'):
-                      print(f"Failed or incomplete: {data['invalid_trials']}")
-          checks = Path('bench-results/preflight/preflight.json')
-          if checks.exists():
-              print('\n### CSRF scope (separate from successful CRUD)')
-              print('Benchmark Rails disables CSRF verification. Invalid-token rejection is not equivalent or eligible for CRUD performance claims.')
-              print('| Target | Preflight | HTTP | Write persisted |')
-              print('| --- | --- | --- | --- |')
-              for target, result in sorted(json.loads(checks.read_text()).items()):
-                  case = result.get('cases', {}).get('csrf_invalid', {})
-                  print(f"| `{target}` | {case.get('status', 'missing')} | {case.get('observed_http_status', '-')} | {case.get('observed_write_persisted', '-')} |")
-          PY
+          python3 scripts/bench/ci_report.py
+          cat bench-results/ci-verification-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v4

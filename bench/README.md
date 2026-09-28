@@ -3,10 +3,10 @@
 This directory provides a reproducible **pilot harness** for comparing what
 Roundhouse changes under CRuby YJIT and JRuby's own JIT, and for comparing the
 emitted program with Spinel AOT. It does not publish a performance ranking.
-Smoke and quick use the closed-loop pilot driver. Diagnostic and full use k6
+Smoke and quick use the closed-loop pilot driver. Diagnostic and historical full use k6
 constant arrival rate. A fixed offered rate compares latency, errors and
 resources at that load; capacity ratios require a separate rate sweep.
-Run the sustained full experiment on a dedicated host.
+Use `gce-c3-capacity.yml` for the formal nine-target two-VM sustained capacity experiment; `full.yml` retains historical fixed-rate pilot behavior.
 
 ## Targets and compatibility
 
@@ -125,3 +125,18 @@ without published performance figures.
   capacity ratios until a rate sweep establishes an SLO-compliant maximum for each target.
 - **Container Execution**: `scripts/run-bench-container.ps1` (PowerShell) and `scripts/run-bench-container.sh` (bash)
   allow running benchmark tests and CLI inside a Linux container to absorb host OS discrepancies.
+
+## GCE two-VM capacity run
+
+See [the preregistered GCE report](../docs/gce-c3-benchmark-report.md) for the
+existing VPC/subnet/NAT setup, nine-target commands, SLO, run provenance and
+result-review rules. The app VM hosts Docker; only the tester VM hosts k6.
+`bench/environments/gce-c3-standard-4.env` is a template: set the actual app
+private IP, zone and project before running. A fixed host port 3000 is used
+only with `--remote-loadgen`; local CI retains ephemeral ports.
+
+The formal report is generated from per-repetition sustained confirmations
+as `gce-summary.md` plus raw `gce-summary.json`. The CI report
+`ci-verification-report.md` is a functional gate and contains no capacity
+ranking. The historical fixed-rate `full.yml` profile does not estimate
+maximum sustainable capacity.

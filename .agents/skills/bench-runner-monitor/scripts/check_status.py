@@ -38,9 +38,10 @@ def find_repo_root() -> Path:
 def read_terraform_defaults(repo_root: Path) -> Dict[str, str]:
     tfstate = repo_root / "infra" / "terraform" / "terraform.tfstate"
     defaults = {
-        "instance": "bench-runner-c3",
+        "instance": "bench-app-c3",
+        "loadgen": "bench-loadgen-c3",
         "zone": "asia-northeast1-b",
-        "project": "sandbox-svc-dev-8rra",
+        "project": "",
     }
     if not tfstate.exists():
         return defaults
@@ -49,8 +50,12 @@ def read_terraform_defaults(repo_root: Path) -> Dict[str, str]:
         with open(tfstate, "r", encoding="utf-8") as f:
             data = json.load(f)
         outputs = data.get("outputs", {})
-        if "instance_name" in outputs:
-            defaults["instance"] = outputs["instance_name"].get("value", defaults["instance"])
+        if "app_instance_name" in outputs:
+            defaults["instance"] = outputs["app_instance_name"].get("value", defaults["instance"])
+        if "loadgen_instance_name" in outputs:
+            defaults["loadgen"] = outputs["loadgen_instance_name"].get("value", defaults["loadgen"])
+        if "zone" in outputs:
+            defaults["zone"] = outputs["zone"].get("value", defaults["zone"])
         for res in data.get("resources", []):
             if res.get("type") == "google_compute_instance":
                 for inst in res.get("instances", []):
@@ -72,14 +77,20 @@ def inspect():
     ps_out = subprocess.run(["ps", "-eo", "pid,ppid,args"], capture_output=True, text=True).stdout
     runner_proc = None
     driver_proc = None
+    k6_proc = None
     for line in ps_out.splitlines():
         if "scripts/bench/run.py" in line and "python" in line and "grep" not in line:
             runner_proc = line.strip()
+        if "k6 run" in line and "grep" not in line:
+            k6_proc = line.strip()
         if "scripts/bench/driver.py" in line and "grep" not in line:
             driver_proc = line.strip()
 
     # Docker container check
-    docker_out = subprocess.run(["docker", "ps", "--format", "{{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Names}}"], capture_output=True, text=True).stdout.strip()
+    try:
+        docker_out = subprocess.run(["docker", "ps", "--format", "{{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Names}}"], capture_output=True, text=True).stdout.strip()
+    except FileNotFoundError:
+        docker_out = ""
     active_containers = []
     for line in docker_out.splitlines():
         if line.strip():
@@ -113,6 +124,7 @@ def inspect():
         "runner_active": runner_proc is not None,
         "runner_cmd": runner_proc,
         "driver_cmd": driver_proc,
+        "k6_cmd": k6_proc,
         "active_containers": active_containers,
         "results_dir": target_dir,
         "timestamp": time.time()
@@ -133,7 +145,8 @@ def inspect():
                 "targets": profile.get("targets", []),
                 "endpoints": profile.get("endpoints", []),
                 "repetitions": profile.get("repetitions", 0),
-                "action": plan.get("action")
+                "action": plan.get("action"),
+                "capacity_search": profile.get("capacity_search", False)
             }
         except Exception as e:
             res["plan_error"] = str(e)
@@ -174,6 +187,11 @@ def inspect():
         if len(all_entries) > len(completed_trials):
             curr_trial = os.path.basename(all_entries[-1])
 
+        if curr_trial:
+            progress_file = os.path.join(trials_dir, curr_trial, "progress.json")
+            if os.path.exists(progress_file):
+                with open(progress_file) as f:
+                    res["progress"] = json.load(f)
         res["trials"] = {
             "total_directories": len(all_entries),
             "completed_count": len(completed_trials),
@@ -228,6 +246,7 @@ def collect_local(results_dir: Optional[str] = None) -> Dict[str, Any]:
                 "targets": profile.get("targets", []),
                 "endpoints": profile.get("endpoints", []),
                 "repetitions": profile.get("repetitions", 0),
+                "capacity_search": profile.get("capacity_search", False),
             }
         except Exception as e:
             res["plan_error"] = str(e)
@@ -265,6 +284,11 @@ def collect_local(results_dir: Optional[str] = None) -> Dict[str, Any]:
                     pass
 
         curr_trial = all_entries[-1].name if len(all_entries) > len(completed_trials) else None
+
+        if curr_trial:
+            progress_file = trials_dir / curr_trial / "progress.json"
+            if progress_file.exists():
+                res["progress"] = json.loads(progress_file.read_text())
 
         res["trials"] = {
             "total_directories": len(all_entries),
@@ -400,7 +424,7 @@ def render_report(data: Dict[str, Any]) -> str:
         lines.append(f"- **Outcomes**: {outcomes}")
 
     # Active execution details
-    if runner_active or active_containers or current_trial:
+    if runner_active or active_containers or current_trial or data.get("tester", {}).get("k6_cmd"):
         lines.append("")
         lines.append("### Active Workload")
         if current_trial:
@@ -408,6 +432,12 @@ def render_report(data: Dict[str, Any]) -> str:
         if active_containers:
             for c in active_containers:
                 lines.append(f"- **Active Container**: `{c['name']}` ({c['image']}) [{c['status']}]")
+        if data.get("progress"):
+            progress = data["progress"]
+            lines.append(f"- **Phase**: `{progress.get('phase')}`; repetition {progress.get('repetition')}; rate {progress.get('rate', '—')} RPS; step {progress.get('step', '—')}")
+        if data.get("tester"):
+            tester = data["tester"]
+            lines.append(f"- **Tester k6**: `{tester.get('k6_cmd') or 'idle'}`")
         if data.get("driver_cmd"):
             driver_brief = data["driver_cmd"].split("/")[-1]
             lines.append(f"- **Workload Driver**: `{driver_brief}`")
@@ -454,6 +484,7 @@ def main() -> int:
     parser.add_argument("--mode", choices=["auto", "gce", "local"], default="auto",
                         help="Check mode: auto (default), gce, or local.")
     parser.add_argument("--instance", help="GCE instance name (default: auto-detected or bench-runner-c3).")
+    parser.add_argument("--loadgen", help="GCE tester VM name.")
     parser.add_argument("--zone", help="GCE zone (default: auto-detected or asia-northeast1-b).")
     parser.add_argument("--project", help="GCP project ID (default: auto-detected or sandbox-svc-dev-8rra).")
     parser.add_argument("--results-dir", help="Local or specific benchmark results directory.")
@@ -467,6 +498,7 @@ def main() -> int:
     instance = args.instance or tf_defaults["instance"]
     zone = args.zone or tf_defaults["zone"]
     project = args.project or tf_defaults["project"]
+    loadgen = args.loadgen or tf_defaults["loadgen"]
 
     mode = args.mode
     if mode == "auto":
@@ -474,7 +506,13 @@ def main() -> int:
 
     def run_once() -> int:
         if mode == "gce":
-            data = collect_gce(instance, zone, project)
+            if not project:
+                data = {"mode": "gce", "error": "Specify --project or provide Terraform outputs"}
+            else:
+                data = collect_gce(instance, zone, project)
+                tester = collect_gce(loadgen, zone, project)
+                if "error" not in tester:
+                    data["tester"] = tester
         else:
             data = collect_local(args.results_dir)
 
