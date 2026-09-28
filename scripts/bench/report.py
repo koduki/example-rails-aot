@@ -62,7 +62,7 @@ def summarize_series(values):
         'iqr': round(q3 - q1, 2),
     }
 
-def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_error_rate):
+def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_error_rate, required_repetitions=1):
     """Aggregate metrics across valid repetitions for a single target and endpoint."""
     target_checks = checks.get(target, {})
     eligible_endpoints = target_checks.get('eligible_endpoints', [])
@@ -150,7 +150,10 @@ def aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_
         'target': target,
         'endpoint': endpoint,
         'is_eligible': is_eligible,
+        'trial_count': len(matching),
         'valid_repetition_count': len(valid_repetitions),
+        'required_repetition_count': required_repetitions,
+        'complete': len(valid_repetitions) >= required_repetitions,
         'verified_repetition_count': len(verified_repetitions),
         'excluded_repetition_count': len(excluded_repetitions),
         'excluded_reasons': excluded_repetitions,
@@ -178,7 +181,7 @@ def compute_pairwise_comparisons(aggregates, endpoint):
 
     def get_rps(target_name):
         agg = by_target.get(target_name)
-        if not agg or not agg['is_eligible'] or agg['valid_repetition_count'] == 0:
+        if not agg or not agg['is_eligible'] or not agg.get('complete', agg['valid_repetition_count'] > 0):
             return None
         return agg['rps']['median']
 
@@ -260,13 +263,17 @@ def generate_markdown_report(report_data):
     for item in report_data['target_aggregates']:
         target = item['target']
         endpoint = item['endpoint']
-        if item['is_eligible'] and item['valid_repetition_count'] > 0:
+        if item['is_eligible'] and item.get('complete', item['valid_repetition_count'] > 0):
             status = '✅ passed'
+        elif item['is_eligible'] and item['valid_repetition_count'] > 0:
+            status = '⚠️ incomplete'
         elif item['is_eligible'] and item.get('verified_repetition_count', 0) > 0:
             status = '✅ verified (functional only)'
+        elif item['is_eligible'] and item.get('trial_count', 0) > 0:
+            status = '⚠️ no valid trials'
         else:
             status = '❌ excluded'
-        reps = f"{item['valid_repetition_count']}"
+        reps = f"{item['valid_repetition_count']}/{item.get('required_repetition_count', 1)}"
         rps = f"{item['rps']['median']}" if item['rps']['median'] is not None else '-'
         p50 = f"{item['p50_ms']['median']}" if item['p50_ms']['median'] is not None else '-'
         p95 = f"{item['p95_ms']['median']}" if item['p95_ms']['median'] is not None else '-'
@@ -404,7 +411,7 @@ def build_report(output_dir, slo_p99_ms=DEFAULT_SLO_P99_MS, slo_error_rate=DEFAU
     fixed_offered_rate = profile.get('driver') == 'k6'
 
     # Determine targets and endpoints
-    targets = sorted({t['target'] for t in trials} | set(checks.keys()))
+    targets = sorted({t['target'] for t in trials}) if trials else sorted(checks.keys())
     endpoints = sorted({t['endpoint'] for t in trials if 'endpoint' in t})
     if not endpoints:
         # Fall back to endpoints from preflight if trials is empty
@@ -413,7 +420,8 @@ def build_report(output_dir, slo_p99_ms=DEFAULT_SLO_P99_MS, slo_error_rate=DEFAU
     target_aggregates = []
     for target in targets:
         for endpoint in endpoints:
-            agg = aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms, slo_error_rate)
+            agg = aggregate_target_endpoint(trials, target, endpoint, checks, slo_p99_ms,
+                                            slo_error_rate, profile.get('repetitions', 1))
             target_aggregates.append(agg)
 
     pairwise_comparisons = []

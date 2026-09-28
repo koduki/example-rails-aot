@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | HTML の無効な作成・更新 | フィールドのエラー表示用 CSS 属性などが Rails と異なる | 操作ケースを failed として保存。読み取り 5 経路は独立に eligible |
 | JSON の無効な作成 | Ruby/JRuby 出力はエラー配列、Spinel は HTML 応答。Rails は項目別 JSON | failed。JSON 読み取りの一致と混同しない |
-| 不正な CSRF token による作成 | 変換後は拒否せず書き込みを受け付ける | failed。書き込み負荷に進む前に修正・再検証が必要 |
+| 不正な CSRF token による作成 | 初回は変換後が拒否せず書き込み。現在の測定用 Rails コピーも検証を無効化 | 初回は failed。現行の事前確認では参照側が拒否しないため excluded。正常系 CRUD の機能確認とは分け、保護されたアプリとの同等性は未達 |
 
 SQLite の実版は CRuby 3.53.2、JRuby JDBC 3.46.1、Spinel 3.45.1。接続後の pragma は一致するが、この版差、HTTP サーバー、DB adapter、コード生成も Spinel との実行構成差に含まれる。現行の Python 負荷ドライバーは **closed loop のオーケストレーション検証用**であり、まだ容量順位や JIT 効果を発表する測定値はない。Actions の同じ実行に生ログと事前比較 artifact がある。
 
@@ -61,7 +61,7 @@ Linux x86-64 + Docker の同じ CLI、コンテナ、結果 schema を維持す�
 
 [初回結果](benchmark-results.md)は GitHub Actions Run `36289166814` の closed-loop smoke（各構成1回・10秒）として公開した。CRuby での Roundhouse / Rails の観測 RPS 比は JIT Off で 8.38、YJIT で 6.75、YJIT の相互作用比は 0.805、Spinel / Rails CRuby Off は 16.09 だった。定常性能の容量比や内部機構を実証した値ではない。JRuby emitted はウォームアップが未収束で比較から除外する。メモリ列はコンテナ使用量でありプロセス RSS ではない。
 
-preflight では5種類の読み取りが一致した。CSRF 不正トークン拒否、無効書き込みの HTML、JSON エラー形状には差異が残る。CRUD は書き込みの全ケースが適格になるまでランナーで遮断する。
+preflight では5種類の読み取りが一致した。その後、測定用 Rails コピーの CSRF 検証を明示的に無効化し、正常系の更新・作成削除に限定した CRUD 機能確認を全9構成で追加した。これらは `verified` であり性能倍率には含めない。CSRF 不正トークン拒否、無効書き込みの HTML、JSON エラー形状には差異が残る。不正 CSRF ケースは参照用 Rails 自体が拒否しないため `excluded` であり、保護された元アプリとの同等性を意味しない。Actions の要約は不正トークン時の HTTP ステータスと DB 書き込みの有無を表示する。
 
 ## 6. 補助評価の実装状況：#21
 

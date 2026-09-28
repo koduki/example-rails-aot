@@ -189,6 +189,9 @@ checks the successful operations used by the selected
 scenario: `update` for `mix`/`update`, `create` plus `delete` for
 `create_delete`. A missing or failed required case blocks the run. The `read`
 scenario also requires the selected GET endpoint to pass preflight.
+The preflight artifact and Actions summary show each target's observed
+invalid-token HTTP status and whether a write persisted. An `excluded` CSRF
+case is an explicit security parity gap, even when valid CRUD is `verified`.
 
 Run the preflight against freshly built images before using the CRUD profile.
 Keep `preflight.json` and its adjacent `preflight-manifest.json` together.
@@ -205,7 +208,8 @@ python3 scripts/bench/run.py run --profile bench/profiles/crud.yml \
 On pull requests the benchmark workflow runs both short CRUD scenarios after
 the read smoke trial (2 operations/s for read/update, 1 operation/s for
 create/delete), across all nine runtime/JIT configurations. These profiles set `verification_only: true`: they run a fixed
-minimum warmup and mark successful trials `verified`, without claiming that
+minimum warmup, continuing until a clean final window if startup had errors,
+and mark successful trials `verified`, without claiming that
 five-second windows with only a few requests establish latency convergence.
 The runner rejects failed operations, dropped iterations, and client saturation.
 It also checks the SQLite state after each timed trial: updates must contain
@@ -213,6 +217,42 @@ the values sent by k6, while create/delete must leave no new articles or
 comments and must advance the article sequence by the number of completed
 operations. A redirect alone does not certify persistence. CI fails if any
 target is not `verified`.
+
+The first retry run ([Actions run 36360930975](https://github.com/koduki/example-rails-aot/actions/runs/36360930975))
+hit a single 5-second DELETE timeout in the first create/delete warmup window
+on emitted JRuby with JIT off. The database contained the original 100
+articles afterward, and the other eight targets verified. Functional smoke
+now continues up to its configured warmup limit until the final window has no
+failed operation, while retaining the earlier failure count in the trial.
+Create/delete also checks that warmup left the fixture article count intact;
+the timed interval still requires every operation and database effect to pass.
+
+Run `Benchmark Pipeline` with `workflow_dispatch` and select
+`ci-jruby-convergence` to compare the four JRuby Rails / emitted and JRuby JIT
+on / off combinations. PR Actions run the short read and functional CRUD
+checks; the long convergence pilot is opt-in. It uses one read endpoint, three rotated
+repetitions, a 60–600 second warmup, and a strict convergence gate. An
+`unstable` trial fails this step; it cannot contribute to the pairwise report.
+The worst configured warmup plus measurement time is 126 minutes for 12 trials,
+plus startup and reporting. These closed-loop results are hosted-runner pilot
+observations; passing convergence does not establish maximum capacity, a
+guaranteed JRuby compiler phase, or a causal JIT speedup. Read the measured
+`warmup.json`, runtime probe, and trial status before interpreting ratios.
+
+The first strict pilot ([Actions run 36353784020](https://github.com/koduki/example-rails-aot/actions/runs/36353784020))
+found 8 `unstable` and 4 `passed` trials. Several JRuby streams had steady
+throughput and p95 late in their 600-second warmup but a few HTTP errors in
+every window; the former gate required *zero* errors per window and therefore
+could not declare convergence. The driver now retries an idempotent GET once
+after a transport exception and records `transport_retries` and `error_types`.
+The pilot accepts at most 0.5% failed warmup requests in each stability window;
+timed requests must stay below 0.1% failures. Non-200 responses remain errors.
+The report requires all three valid repetitions for each target before
+publishing a pairwise ratio, and marks partial series incomplete. These
+thresholds are an orchestration pilot policy, not evidence of an error-free
+application or an SLO-compliant production service.
+
+The corrected [Actions run 36362615236](https://github.com/koduki/example-rails-aot/actions/runs/36362615236) passed all 12 JRuby trials and both nine-target functional CRUD checks. On `/articles`, median RPS was 301.41 for Rails JRuby JIT on, 95.08 for off, 2257.07 for emitted JIT on, and 1033.87 for off. The emitted/Rails median RPS ratios were 7.488 (on) and 10.874 (off). Rails JIT-on repetitions were 105.0, 301.4, and 313.8 RPS, a large between-run spread despite each passing its local four-window test. The ratios remain preliminary hosted-runner observations; a local stability gate does not certify the same long-term JIT plateau across repetitions. Transport retries are recorded per trial and included in request latency.
 
 The 2026-09-27 PR run at [Actions run 36307291456](https://github.com/koduki/example-rails-aot/actions/runs/36307291456)
 finished with 7 `passed` read/update trials and 4 `passed` plus 3 `unstable`

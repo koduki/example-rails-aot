@@ -156,5 +156,27 @@ class ReportUnitTests(unittest.TestCase):
             self.assertEqual(data['pairwise_comparisons'], [])
             self.assertIn('does not establish maximum capacity', (root / 'summary.md').read_text(encoding='utf-8'))
 
+    def test_incomplete_repetitions_cannot_produce_jruby_ratio(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / 'preflight').mkdir()
+            (root / 'trials').mkdir()
+            (root / 'plan.json').write_text(json.dumps({'profile': {'repetitions': 3}}))
+            names = ('rails-jruby', 'rails-jruby-off')
+            (root / 'preflight/preflight.json').write_text(json.dumps({
+                name: {'eligible_endpoints': ['/articles']} for name in names}))
+            rows = [{'target': name, 'endpoint': '/articles', 'repetition': rep,
+                     'status': 'passed' if name.endswith('-off') or rep == 1 else 'unstable',
+                     'measurement': {'rps': 100.0 if name.endswith('-off') else 150.0,
+                                     'latency_ms': {'p99': 10}, 'requests_total': 100,
+                                     'requests_failed': 0}}
+                    for name in names for rep in range(1, 4)]
+            (root / 'trials/per-run.json').write_text(json.dumps(rows))
+            data = report.build_report(root)
+            self.assertIsNone(data['pairwise_comparisons'][0]['jruby_compile_mode_ratio']['rails'])
+            md = (root / 'summary.md').read_text()
+            self.assertIn('⚠️ incomplete | 1/3', md)
+            self.assertIn('✅ passed | 3/3', md)
+
 if __name__ == '__main__':
     unittest.main()

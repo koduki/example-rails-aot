@@ -15,6 +15,15 @@ from prepare import prepare
 from preflight import snapshot
 
 class SmokeProfileTests(unittest.TestCase):
+    def test_functional_warmup_recovers_only_after_a_clean_window(self):
+        failed = {'requests_failed': 1, 'iterations_dropped': 0,
+                  'operations': {'failed': 1}}
+        clean = {'requests_failed': 0, 'iterations_dropped': 0,
+                 'operations': {'failed': 0}}
+        self.assertFalse(run.warmup_valid([failed]))
+        self.assertTrue(run.warmup_valid([failed, clean][-1:]))
+        self.assertFalse(run.warmup_valid([clean, failed][-1:]))
+
     def test_crud_database_checks_detect_real_writes_and_leaks(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / 'fixture.sqlite3'
@@ -83,6 +92,18 @@ class SmokeProfileTests(unittest.TestCase):
         self.assertEqual(len(sched), len(p['targets']))
         scheduled_targets = {entry['target'] for entry in sched}
         self.assertEqual(scheduled_targets, set(p['targets']))
+
+    def test_actions_jruby_comparison_requires_converged_repetitions(self):
+        p = run.config(ROOT / 'bench/profiles/ci-jruby-convergence.yml')
+        self.assertEqual(set(p['targets']), {
+            'rails-jruby-off', 'rails-jruby', 'emit-jruby-off', 'emit-jruby'})
+        self.assertEqual(p['repetitions'], 3)
+        self.assertEqual(p['endpoints'], ['/articles'])
+        self.assertFalse(p['allow_unstable'])
+        self.assertGreaterEqual(p['warmup_max_seconds'], 600)
+        self.assertGreaterEqual(p['total_timeout'], len(run.schedule(p)) *
+                                (p['ready_timeout'] + p['warmup_max_seconds'] +
+                                 p['measurement_seconds']))
 
     def test_preflight_file_reuse_in_main(self):
         with tempfile.TemporaryDirectory() as d:

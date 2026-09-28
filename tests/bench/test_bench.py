@@ -40,6 +40,16 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(result['cases']['/articles.json']['difference']['path'],
                          '$.canonical.body.id')
 
+    def test_csrf_exclusion_retains_observed_http_and_database_effect(self):
+        reference = {'cases': {'csrf_invalid': {'status': 'failed',
+            'raw': {'status': 302}, 'write_persisted': True}}}
+        candidate = {'cases': {'csrf_invalid': {'status': 'failed',
+            'raw': {'status': 303}, 'write_persisted': True}}}
+        case = preflight.compare(reference, candidate)['cases']['csrf_invalid']
+        self.assertEqual(case['status'], 'excluded')
+        self.assertEqual(case['observed_http_status'], 303)
+        self.assertTrue(case['observed_write_persisted'])
+
     def test_timestamps_are_not_blindly_removed(self):
         a = {'status':200, 'content_type':'application/json','location':None,
              'body':'{"created_at":"2025-01-01T00:00:00Z"}'}
@@ -87,6 +97,13 @@ class BenchmarkTests(unittest.TestCase):
         rows[-1]['rps']=200
         self.assertFalse(run.stable(rows,p))
         rows[-1]['rps']=100; rows[-1]['errors']=1
+        self.assertFalse(run.stable(rows,p))
+
+    def test_jruby_warmup_tolerates_sparse_errors_but_rejects_high_rate(self):
+        p=run.config(ROOT/'bench/profiles/ci-jruby-convergence.yml')
+        rows=[{'rps':100, 'p95_ms':5, 'errors':2, 'requests_total':1000} for _ in range(4)]
+        self.assertTrue(run.stable(rows,p))
+        rows[-1]['errors']=6
         self.assertFalse(run.stable(rows,p))
 
     def test_source_copy_does_not_mutate_original(self):

@@ -36,7 +36,7 @@ Rails アプリを [Roundhouse](https://github.com/rubys/roundhouse) で変換�
 
 この短い試行の処理量比は、Roundhouse／Rails が CRuby JIT Off で **8.38 倍**、YJIT On で **6.75 倍**、Spinel／Rails CRuby JIT Off が **16.09 倍**でした。YJIT On／Off は Rails で **1.65 倍**、変換後 Ruby で **1.33 倍**、両倍率の比は **0.805** です。JRuby JIT Off は初回測定の7構成に含まれず、JIT 有無の効果はこの表から比較できません。Roundhouse 変換後の JRuby JIT On はウォームアップが収束せず、順位付けや倍率比較に使いません。JRuby JIT Off にしても JVM JIT は有効です。メモリはコンテナ使用量でありプロセス RSS ではありません。
 
-初回の事前比較では全9構成の5種類の読み取り経路が適格でした。その後、ベンチマーク専用コピーに限って Rails の CSRF 検証を無効化し、正常系の更新および作成・削除を別シナリオで検証できるようにしました。[CRUD 検証手順](docs/benchmark.md#benchmark-only-crud-scope)を参照してください。無効な書き込みの HTML 表示、JSON バリデーションエラー、不正 CSRF トークンの拒否には差が残り、アプリ全体の同等性は未達です。上記の予備測定の倍率は最大処理容量や JIT の因果的な寄与を示しません。専用 GCE ホストでの反復測定、open-arrival 負荷での容量探索は未実施です。条件、p95/p99、CPU、除外理由、次の検証項目は[調査レポート](docs/benchmark-results.md)に記載しています。
+初回の事前比較では全9構成の5種類の読み取り経路が適格でした。その後、ベンチマーク専用コピーに限って Rails の CSRF 検証を無効化し、正常系の更新および作成・削除を別シナリオで検証できるようにしました。[CRUD 検証手順](docs/benchmark.md#benchmark-only-crud-scope)を参照してください。無効な書き込みの HTML 表示と JSON バリデーションエラーには差が残ります。不正 CSRF トークンは比較用 Rails も拒否せず書き込むため、この項目は同等性の合格から除外します。アプリ全体の同等性は未達です。上記の予備測定の倍率は最大処理容量や JIT の因果的な寄与を示しません。専用 GCE ホストでの反復測定、open-arrival 負荷での容量探索は未実施です。条件、p95/p99、CPU、除外理由、次の検証項目は[調査レポート](docs/benchmark-results.md)に記載しています。
 
 [後続の Actions 実行 36320457786](https://github.com/koduki/example-rails-aot/actions/runs/36320457786)では、JRuby JIT Off を含む**全9構成**で正常系の読み取り・更新と作成・削除がそれぞれ **9/9 件 `verified`** でした。各試行の DB 照合は成功し、HTTP 失敗・反復 drop はゼロです。これは低負荷の機能確認であり、上表の処理量・遅延との比較や性能倍率には使いません。[生データ](https://github.com/koduki/example-rails-aot/actions/runs/36320457786/artifacts/10932791366)を参照してください。
 
@@ -97,7 +97,7 @@ python3 scripts/bench/run.py run --profile bench/profiles/smoke.yml \
 python3 scripts/bench/run.py report --output bench-results/measurement-local-01
 ```
 
-`--output` には**毎回新しいディレクトリ名**を指定します。標準の smoke profile は主7構成を測定します。JRuby JIT Off の診断2構成も検証する場合は、[ターゲット一覧](bench/targets.yml)の ID を `--targets` に指定してください。事前検証の `preflight-local-01/preflight/preflight.json` で対象経路の適格性を確認してから、測定結果の `summary.md`、`summary.csv`、`trials/per-run.json`、各試行の `warmup.json` と `telemetry.json` を読みます。失敗や未収束の試行を倍率に混ぜないでください。
+`--output` には**毎回新しいディレクトリ名**を指定します。標準の smoke profile は主7構成を測定します。JRuby JIT Off の診断2構成も検証する場合は、[ターゲット一覧](bench/targets.yml)の ID を `--targets` に指定してください。事前検証の `preflight-local-01/preflight.json` で対象経路の適格性を確認してから、測定結果の `summary.md`、`summary.csv`、`trials/per-run.json`、各試行の `warmup.json` と `telemetry.json` を読みます。失敗や未収束の試行を倍率に混ぜないでください。JRuby 4 構成の各3回の収束測定は、Actions の「Benchmark Pipeline」を手動起動して profile `ci-jruby-convergence` を選びます。PR 自動実行は短い読み取りと正常系 CRUD の検証までです。収束試験は最大600秒のウォームアップを許し、未収束が残れば失敗します。ホスト上の予備比較であり容量順位ではありません。
 
 正常系 CRUD の機能と測定経路は同じ事前検証を使って確認できます。`crud.yml` は読み取り・更新、`crud-create-delete.yml` は作成・削除です。各試行の `database_check` が `passed` で、状態が `verified` なら HTTP と書き込み後の SQLite 状態が一致しています。これらの短時間プロファイルは性能比較のサンプルには含めません。
 
