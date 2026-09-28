@@ -86,7 +86,7 @@ jobs:
 
       - name: Validate two-VM Terraform
         run: |
-          if (cd infra/terraform && terraform fmt -check && terraform init -backend=false && terraform validate); then
+          if (cd infra/terraform && terraform fmt -diff -check && terraform init -backend=false && terraform validate); then
             echo '{"status":"passed"}' > bench-results/terraform-status.json
           else
             echo '{"status":"failed"}' > bench-results/terraform-status.json
