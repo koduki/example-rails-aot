@@ -2,6 +2,8 @@ name: Benchmark Pipeline
 on:
   pull_request:
     paths:
+      - 'blog/**'
+      - 'config/aot-toolchain.env'
       - 'bench/**'
       - 'scripts/bench/**'
       - 'tests/bench/**'

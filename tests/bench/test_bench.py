@@ -74,6 +74,22 @@ class BenchmarkTests(unittest.TestCase):
         b['body']=b['body'].replace('Title','Wrong')
         self.assertNotEqual(preflight.canonical(a),preflight.canonical(b))
 
+    def test_disabled_csrf_markup_is_excluded_but_form_fields_are_compared(self):
+        base = {'status': 200, 'content_type': 'text/html', 'location': None}
+        rails = dict(base, body='<main><form><input name="article[title]" value="A"></form></main>')
+        emitted = dict(base, body='<main><form><input name="authenticity_token" value="token"><input name="article[title]" value="A"></form></main>')
+        self.assertEqual(preflight.canonical(rails), preflight.canonical(emitted))
+        emitted['body'] = emitted['body'].replace('value="A"', 'value="B"')
+        self.assertNotEqual(preflight.canonical(rails), preflight.canonical(emitted))
+
+    def test_aot_html_comparison_keeps_method_and_invalid_field_content(self):
+        rails = '<main><div class="field_with_errors"><label>Title</label></div><input autocomplete="off" name="_method" value="delete"></main>'
+        emitted = '<main><label>Title</label><input name="_method" value="delete"></main>'
+        self.assertEqual(preflight.legacy.normalize_html(rails),
+                         preflight.legacy.normalize_html(emitted))
+        self.assertNotEqual(preflight.legacy.normalize_html(rails),
+                            preflight.legacy.normalize_html(emitted.replace('delete', 'patch')))
+
     def test_probe_rejects_jit_and_db_mismatch(self):
         info={'runtime':'ruby','jit':'off','yjit_enabled':True,'pragmas':preflight.PRAGMAS}
         response={'status':200,'body':json.dumps(info)}
@@ -111,6 +127,8 @@ class BenchmarkTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             prepared=prepare_app.prepare(Path(d)/'app')
             self.assertEqual(prepared['source_hash'], before)
+            self.assertEqual((Path(d)/'app/config/application.rb').read_bytes(),
+                             (ROOT/'blog/config/application.rb').read_bytes())
             self.assertIn('config.load_defaults 8.0',(Path(d)/'app/config/application.rb').read_text())
         self.assertEqual(before,prepare_app.tree_hash(ROOT/'blog'))
 

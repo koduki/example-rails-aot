@@ -175,15 +175,14 @@ GCE 測定を実施する際は、結果の信頼性を担保するため、以�
 
 `bench/profiles/crud.yml` uses the 90% read / 10% valid update scenario;
 `bench/profiles/crud-create-delete.yml` uses a valid create/delete cycle. The
-benchmark copy of the Rails application disables the CSRF verifier in
-`bench/runtime/production.rb`, matching the current Roundhouse output. The
-original `blog/` application retains its default CSRF protection. This is a
-benchmark policy, not evidence that the generated server safely rejects
-forged requests.
+canonical `blog/` Rails 8.0.5.1 fixture disables CSRF verification in
+`config/application.rb`, matching the current Roundhouse output; its derived
+benchmark copy retains that policy. This is an explicit scope decision for an
+AOT experiment, not evidence that either server safely rejects forged requests.
 
 The preflight still records invalid HTML and JSON writes. Its invalid-CSRF
-case is excluded because even the benchmark Rails reference no longer rejects
-the token; the source application still protects writes. Those cases are
+case is excluded because the canonical and benchmark Rails references do not
+reject the token. Those cases are
 **not** eligible and are not measured as equivalent operations. The CRUD gate
 checks the successful operations used by the selected
 scenario: `update` for `mix`/`update`, `create` plus `delete` for
@@ -191,7 +190,7 @@ scenario: `update` for `mix`/`update`, `create` plus `delete` for
 scenario also requires the selected GET endpoint to pass preflight.
 The preflight artifact and Actions summary show each target's observed
 invalid-token HTTP status and whether a write persisted. An `excluded` CSRF
-case is an explicit security parity gap, even when valid CRUD is `verified`.
+case is an explicit limit of this fixture, even when valid CRUD is `verified`.
 
 Run the preflight against freshly built images before using the CRUD profile.
 Keep `preflight.json` and its adjacent `preflight-manifest.json` together.

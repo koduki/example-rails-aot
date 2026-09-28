@@ -36,6 +36,7 @@ const data = {state: {testRunDurationMs: 10000}, metrics: {
   successful_requests: {values: {count: 500}},
   successful_operations: {values: {count: 500}},
   total_operations: {values: {count: 500}},
+  operation_duration_ms: {values: {med: 12, 'p(95)': 20, 'p(99)': 30}},
 }};
 """ + source + "\nconsole.log(handleSummary(data)[__ENV.SUMMARY_PATH]);"
                 res = subprocess.run(['node', '-e', harness], capture_output=True, text=True, check=True)
@@ -45,6 +46,9 @@ const data = {state: {testRunDurationMs: 10000}, metrics: {
                 self.assertEqual(summary['p95_ms'], 4)
                 self.assertEqual(summary['latency_ms']['p99'], 8)
                 self.assertEqual(summary['requests_failed'], 0)
+                if name == 'crud':
+                    self.assertEqual(summary['operation_latency_ms']['p99'], 30)
+                    self.assertEqual(summary['operations']['ops_successful_rate'], 50)
                 self.assertIn('p(99)', source)
 
     def test_k6_missing_summary_fails_without_closed_loop_fallback(self):

@@ -32,6 +32,12 @@ class DOM(html.parser.HTMLParser):
         self.events = []
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
+        # The fixture does not verify CSRF. Rails omits these optional tokens,
+        # while the pinned emitter still renders them; compare the application
+        # content and form fields without treating token markup as functionality.
+        if (tag == 'meta' and values.get('name') in ('csrf-param', 'csrf-token')) or (
+                tag == 'input' and values.get('name') == 'authenticity_token'):
+            return
         for key in list(values):
             if key == 'nonce' or key == 'signed-stream-name' or (
                 key == 'value' and values.get('name') == 'authenticity_token') or (

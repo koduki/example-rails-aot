@@ -1,6 +1,6 @@
 # Rails / Roundhouse / Spinel ベンチマーク：残作業と実施順
 
-更新日：2026-09-27。対象は親 Issue [#11](https://github.com/koduki/example-rails-aot/issues/11) のうち、P0 の後に残る [#16〜#21](https://github.com/koduki/example-rails-aot/issues/16)。P0 実装（#12〜#15）は [PR #22](https://github.com/koduki/example-rails-aot/pull/22)、#16 は [PR #23](https://github.com/koduki/example-rails-aot/pull/23)、#17 は [PR #24](https://github.com/koduki/example-rails-aot/pull/24)、#18 は [PR #25](https://github.com/koduki/example-rails-aot/pull/25)、#19 は [PR #26](https://github.com/koduki/example-rails-aot/pull/26)、#20 は [PR #27](https://github.com/koduki/example-rails-aot/pull/27) で main にマージ完了。現在は #21（4 コア・大容量 fixture・CRUD・起動およびビルドコストの補助評価）を実装・検証完了。
+更新日：2026-09-28。これは Issue [#11](https://github.com/koduki/example-rails-aot/issues/11) の実装経緯と未実施測定の記録である。歴史的な run は当時のコミットに属し、正本を Rails 8.0.5.1・CSRF無効に揃えた後の実測ではない。最新の解釈は[検証レポート](roundhouse-rails-jit-aot-report.md)を参照。
 
 ## 現在地と結果に付ける条件
 
@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | HTML の無効な作成・更新 | フィールドのエラー表示用 CSS 属性などが Rails と異なる | 操作ケースを failed として保存。読み取り 5 経路は独立に eligible |
 | JSON の無効な作成 | Ruby/JRuby 出力はエラー配列、Spinel は HTML 応答。Rails は項目別 JSON | failed。JSON 読み取りの一致と混同しない |
-| 不正な CSRF token による作成 | 初回は変換後が拒否せず書き込み。現在の測定用 Rails コピーも検証を無効化 | 初回は failed。現行の事前確認では参照側が拒否しないため excluded。正常系 CRUD の機能確認とは分け、保護されたアプリとの同等性は未達 |
+| 不正な CSRF token による作成 | 初回は変換後が拒否せず書き込み。現行の正本・測定用コピーはいずれも検証を無効化 | 初回は failed。現行の事前確認では参照側が拒否しないため excluded。正常系 CRUD と分け、本番向け保護の検証対象外と明記 |
 
 SQLite の実版は CRuby 3.53.2、JRuby JDBC 3.46.1、Spinel 3.45.1。接続後の pragma は一致するが、この版差、HTTP サーバー、DB adapter、コード生成も Spinel との実行構成差に含まれる。現行の Python 負荷ドライバーは **closed loop のオーケストレーション検証用**であり、まだ容量順位や JIT 効果を発表する測定値はない。Actions の同じ実行に生ログと事前比較 artifact がある。
 
@@ -61,7 +61,7 @@ Linux x86-64 + Docker の同じ CLI、コンテナ、結果 schema を維持す�
 
 [初回結果](benchmark-results.md)は GitHub Actions Run `36289166814` の closed-loop smoke（各構成1回・10秒）として公開した。CRuby での Roundhouse / Rails の観測 RPS 比は JIT Off で 8.38、YJIT で 6.75、YJIT の相互作用比は 0.805、Spinel / Rails CRuby Off は 16.09 だった。定常性能の容量比や内部機構を実証した値ではない。JRuby emitted はウォームアップが未収束で比較から除外する。メモリ列はコンテナ使用量でありプロセス RSS ではない。
 
-preflight では5種類の読み取りが一致した。その後、測定用 Rails コピーの CSRF 検証を明示的に無効化し、正常系の更新・作成削除に限定した CRUD 機能確認を全9構成で追加した。これらは `verified` であり性能倍率には含めない。CSRF 不正トークン拒否、無効書き込みの HTML、JSON エラー形状には差異が残る。不正 CSRF ケースは参照用 Rails 自体が拒否しないため `excluded` であり、保護された元アプリとの同等性を意味しない。Actions の要約は不正トークン時の HTTP ステータスと DB 書き込みの有無を表示する。
+preflight では5種類の読み取りが一致した。その後、測定用 Rails コピーの CSRF 検証を無効化し、正常系の更新・作成削除に限定した CRUD 機能確認を全9構成で追加した。現在は正本も同じ Rails 8.0.5.1・CSRF無効の実験方針に揃え、[新しい測定 CI](https://github.com/koduki/example-rails-aot/actions/runs/36380159185)で事前比較と短い smoke、正常系 CRUD を再実行した。旧値と同一系列にはしない。短い CI の成功は `verified` であり性能倍率には含めない。CSRF 不正トークン拒否は検証対象外、無効書き込みの HTML、JSON エラー形状には差異が残る。不正 CSRF ケースは参照用 Rails 自体が拒否しないため `excluded`。Actions の要約は不正トークン時の HTTP ステータスと DB 書き込みの有無を表示する。
 
 ## 6. 補助評価の実装状況：#21
 

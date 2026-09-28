@@ -20,13 +20,14 @@ Run the sustained full experiment on a dedicated host.
 
 The JVM compiler stays enabled in both JRuby modes. Spinel without Roundhouse
 is unsupported for this application; no synthetic zero value is reported.
-`bench/targets.yml` is the machine-readable matrix. The application under
-`blog/` stays at its existing Rails version. `prepare_app.py` builds a
-disposable copy using a shared Rails **8.0.5.1** dependency set for CRuby
+`bench/targets.yml` is the machine-readable matrix. The canonical application
+under `blog/` is Rails **8.0.5.1**, with CSRF verification disabled as an
+explicit experiment condition. `prepare_app.py` builds a disposable copy
+using a shared Rails **8.0.5.1** dependency set for CRuby
 **3.4.5** and JRuby **10.0.7.0** (Ruby 3.4 compatibility), with the JDBC
 SQLite adapter 80.0.pre1. The adapter core constrains Active Record to the 8.0
-series, which is why the 8.1 application is copied and adapted rather than mixed
-with the other targets. The Ruby dependencies and their checksums are in
+series. The derived copy changes the dependency and runtime configuration,
+but no longer rewrites the source Rails version. The Ruby dependencies and their checksums are in
 `Gemfile.lock` and `emitted.Gemfile.lock`; the Roundhouse and Spinel versions
 remain pinned in the repository toolchain. Container base tags live in
 `toolchain.env`; each build records the resolved immutable base image digests,
@@ -90,9 +91,11 @@ per-connection SQLite pragmas from the server process, outside timed paths.
 
 During local CRuby validation, the five read paths matched after repairing the
 emitted hidden-field attributes. Known write differences still include JSON
-validation error shape and CSRF rejection; `preflight.json` reports the exact
-status for each target and case. An endpoint becomes eligible only when its own
-comparison passes. A passing read does not imply full application equivalence.
+validation error shape. CSRF rejection is deliberately outside this fixture:
+the Rails reference does not reject forged writes, so preflight marks that
+case `excluded`. `preflight.json` reports the exact status for each target
+and case. An endpoint becomes eligible only when its own comparison passes.
+A passing read or normal CRUD operation does not imply full application equivalence.
 Do not compare throughput from failed or excluded cases.
 Reuse of `preflight.json` requires its adjacent `preflight-manifest.json` and
 matching source revision, validation code, target matrix, container images,
@@ -103,6 +106,12 @@ and result digest. Changed inputs require another preflight.
 P1 provides open-arrival load generation (`bench/k6/read.js`), continuous
 resource telemetry (`scripts/bench/collect.py`), and offline statistical
 pairwise comparison reporting (`scripts/bench/report.py`).
+For CRUD, one logical operation includes all its HTTP requests: update fetches
+the edit form and submits the write; create/delete fetches the form, creates,
+and deletes. The report uses successful operations/s and complete operation
+p50/p95/p99 and error rate for converged CRUD trials, while raw JSON retains
+request-level metrics. The short CI `verified` trials remain functional checks
+without published performance figures.
 
 - **k6 Open-Arrival Rate**: Executes `constant-arrival-rate` scenarios against eligible endpoints.
   Tracks started, completed, successful, and dropped iterations. Trials with `dropped_iterations > 0`
