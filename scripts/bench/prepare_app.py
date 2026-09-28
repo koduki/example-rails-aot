@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Derive a benchmark copy. Never mutate blog/ or silently patch business code."""
+"""Derive a disposable runtime copy of the canonical Rails 8.0 fixture."""
 import argparse
 import hashlib
 import json
@@ -27,26 +27,21 @@ def prepare(destination):
         (destination / directory).mkdir(parents=True, exist_ok=True)
     for name in ('Gemfile', 'Gemfile.lock'):
         shutil.copyfile(ROOT / 'bench' / name, destination / name)
-    for path in [destination / 'config/application.rb', destination / 'db/schema.rb',
-                 *destination.glob('db/migrate/*.rb')]:
-        text = path.read_text().replace('config.load_defaults 8.1', 'config.load_defaults 8.0')
-        text = text.replace('Schema[8.1]', 'Schema[8.0]').replace('Migration[8.1]', 'Migration[8.0]')
-        path.write_text(text)
+    source_gemfile = (ROOT / 'blog/Gemfile').read_text()
+    if 'gem "rails", "8.0.5.1"' not in source_gemfile:
+        raise ValueError('Canonical fixture must use Rails 8.0.5.1')
     boot = destination / 'config/boot.rb'
     boot.write_text(boot.read_text().replace('require "bootsnap/setup"', '# Bootsnap disabled for both runtimes'))
     for source, target in [('production.rb', 'config/environments/production.rb'),
                            ('database.yml', 'config/database.yml'), ('puma.rb', 'config/puma.rb')]:
         shutil.copyfile(ROOT / 'bench/runtime' / source, destination / target)
     (destination / 'config/cable.yml').write_text('production:\n  adapter: async\n')
-    # The benchmark-only production configuration disables Rails' CSRF verifier
-    # to match the current emitted runtimes. The source app is not modified.
     manifest = {'schema_version': 1, 'rails': '8.0.5.1', 'source_hash': tree_hash(ROOT / 'blog'),
                 'derived_hash': tree_hash(destination), 'changes': [
-                    'Rails 8.0 framework compatibility; platform-specific database gems',
+                    'Benchmark dependency lockfile includes JRuby JDBC and platform-specific gems',
                     'production settings: no response cache, inline jobs, async cable, warn logging',
                     'Bootsnap disabled in both Ruby runtimes; JIT explicit',
-                    'database location supplied externally; identical SQLite pragmas',
-                    'benchmark-only production CSRF verification disabled for all targets']}
+                    'database location supplied externally; identical SQLite pragmas']}
     (destination / 'benchmark-source.json').write_text(json.dumps(manifest, indent=2) + '\n')
     return manifest
 

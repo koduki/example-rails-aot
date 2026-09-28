@@ -8,8 +8,13 @@ Bundler.require(*Rails.groups)
 
 module Blog
   class Application < Rails::Application
-    # Initialize configuration defaults for originally generated Rails version.
-    config.load_defaults 8.1
+    # This repository's canonical Rails baseline is 8.0.5.1.
+    config.load_defaults 8.0
+
+    # This fixture deliberately exercises the emitted runtimes' current write
+    # semantics. It is not a production-ready CSRF policy.
+    config.action_controller.default_protect_from_forgery = false
+    config.action_controller.allow_forgery_protection = false
 
     # Please, add to the `ignore` list any other `lib` subdirectories that do
     # not contain `.rb` files, or that should not be reloaded or eager loaded.

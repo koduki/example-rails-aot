@@ -111,6 +111,8 @@ class BenchmarkTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             prepared=prepare_app.prepare(Path(d)/'app')
             self.assertEqual(prepared['source_hash'], before)
+            self.assertEqual((Path(d)/'app/config/application.rb').read_bytes(),
+                             (ROOT/'blog/config/application.rb').read_bytes())
             self.assertIn('config.load_defaults 8.0',(Path(d)/'app/config/application.rb').read_text())
         self.assertEqual(before,prepare_app.tree_hash(ROOT/'blog'))
 

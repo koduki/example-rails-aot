@@ -473,6 +473,10 @@ def sample(server, endpoint, duration, p, cpus, directory=None):
         if measured['elapsed'] <= 0 or (measured['requests_successful'] > 0 and (
                 measured['p95_ms'] <= 0 or measured.get('latency_ms', {}).get('p99', 0) <= 0)):
             raise ValueError(f'Incomplete k6 duration or latency metrics: {summary_path}')
+        if is_crud and (measured.get('driver') != 'k6-crud' or
+                measured.get('operations', {}).get('ops_successful_rate') is None or
+                measured.get('operation_latency_ms', {}).get('p99', 0) <= 0):
+            raise ValueError(f'Incomplete CRUD operation rate or latency metrics: {summary_path}')
         return measured
 
     args = [sys.executable, str(ROOT / 'scripts/bench/driver.py'), server.url + endpoint,

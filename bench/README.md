@@ -103,6 +103,12 @@ and result digest. Changed inputs require another preflight.
 P1 provides open-arrival load generation (`bench/k6/read.js`), continuous
 resource telemetry (`scripts/bench/collect.py`), and offline statistical
 pairwise comparison reporting (`scripts/bench/report.py`).
+For CRUD, one logical operation includes all its HTTP requests: update fetches
+the edit form and submits the write; create/delete fetches the form, creates,
+and deletes. The report uses successful operations/s and complete operation
+p50/p95/p99 and error rate for converged CRUD trials, while raw JSON retains
+request-level metrics. The short CI `verified` trials remain functional checks
+without published performance figures.
 
 - **k6 Open-Arrival Rate**: Executes `constant-arrival-rate` scenarios against eligible endpoints.
   Tracks started, completed, successful, and dropped iterations. Trials with `dropped_iterations > 0`
