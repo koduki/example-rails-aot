@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: 'Hosted-runner profile (smoke, quick, diagnostic, crud, crud-create-delete); run full on a dedicated host'
+        description: 'Hosted-runner profile (including long JRuby convergence pilot); run full on a dedicated host'
         required: true
         default: 'quick'
         type: choice
@@ -22,6 +22,7 @@ on:
           - diagnostic
           - crud
           - crud-create-delete
+          - ci-jruby-convergence
       targets:
         description: 'Comma-separated target list (blank for all profile targets)'
         required: false
@@ -119,14 +120,6 @@ jobs:
             --preflight-file bench-results/preflight/preflight.json \
             --output bench-results/crud-create-delete
 
-      - name: Measure converged JRuby 2x2 pilot on PR
-        if: github.event_name == 'pull_request'
-        run: |
-          python3 scripts/bench/run.py run \
-            --profile bench/profiles/ci-jruby-convergence.yml \
-            --preflight-file bench-results/preflight/preflight.json \
-            --output bench-results/jruby-convergence
-
       - name: Publish Step Summary report
         if: always()
         run: |
@@ -135,9 +128,6 @@ jobs:
           fi
           if [ -f bench-results/measurement/diagnostics.md ]; then
             cat bench-results/measurement/diagnostics.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-          if [ -f bench-results/jruby-convergence/summary.md ]; then
-            cat bench-results/jruby-convergence/summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json

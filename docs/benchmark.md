@@ -227,8 +227,10 @@ failed operation, while retaining the earlier failure count in the trial.
 Create/delete also checks that warmup left the fixture article count intact;
 the timed interval still requires every operation and database effect to pass.
 
-PR Actions also runs `ci-jruby-convergence.yml` for the four JRuby Rails / emitted
-and JRuby JIT on / off combinations. It uses one read endpoint, three rotated
+Run `Benchmark Pipeline` with `workflow_dispatch` and select
+`ci-jruby-convergence` to compare the four JRuby Rails / emitted and JRuby JIT
+on / off combinations. PR Actions run the short read and functional CRUD
+checks; the long convergence pilot is opt-in. It uses one read endpoint, three rotated
 repetitions, a 60–600 second warmup, and a strict convergence gate. An
 `unstable` trial fails this step; it cannot contribute to the pairwise report.
 The worst configured warmup plus measurement time is 126 minutes for 12 trials,
@@ -249,6 +251,8 @@ The report requires all three valid repetitions for each target before
 publishing a pairwise ratio, and marks partial series incomplete. These
 thresholds are an orchestration pilot policy, not evidence of an error-free
 application or an SLO-compliant production service.
+
+The corrected [Actions run 36362615236](https://github.com/koduki/example-rails-aot/actions/runs/36362615236) passed all 12 JRuby trials and both nine-target functional CRUD checks. On `/articles`, median RPS was 301.41 for Rails JRuby JIT on, 95.08 for off, 2257.07 for emitted JIT on, and 1033.87 for off. The emitted/Rails median RPS ratios were 7.488 (on) and 10.874 (off). Rails JIT-on repetitions were 105.0, 301.4, and 313.8 RPS, a large between-run spread despite each passing its local four-window test. The ratios remain preliminary hosted-runner observations; a local stability gate does not certify the same long-term JIT plateau across repetitions. Transport retries are recorded per trial and included in request latency.
 
 The 2026-09-27 PR run at [Actions run 36307291456](https://github.com/koduki/example-rails-aot/actions/runs/36307291456)
 finished with 7 `passed` read/update trials and 4 `passed` plus 3 `unstable`

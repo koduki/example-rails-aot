@@ -95,7 +95,7 @@ python3 scripts/bench/run.py run --profile bench/profiles/smoke.yml \
 python3 scripts/bench/run.py report --output bench-results/measurement-local-01
 ```
 
-`--output` には**毎回新しいディレクトリ名**を指定します。標準の smoke profile は主7構成を測定します。JRuby JIT Off の診断2構成も検証する場合は、[ターゲット一覧](bench/targets.yml)の ID を `--targets` に指定してください。事前検証の `preflight-local-01/preflight.json` で対象経路の適格性を確認してから、測定結果の `summary.md`、`summary.csv`、`trials/per-run.json`、各試行の `warmup.json` と `telemetry.json` を読みます。失敗や未収束の試行を倍率に混ぜないでください。PR の Actions では JRuby 4 構成を各3回、最大600秒のウォームアップで別途測定し、未収束が残れば失敗にします。これはホスト上の予備比較であり容量順位ではありません。
+`--output` には**毎回新しいディレクトリ名**を指定します。標準の smoke profile は主7構成を測定します。JRuby JIT Off の診断2構成も検証する場合は、[ターゲット一覧](bench/targets.yml)の ID を `--targets` に指定してください。事前検証の `preflight-local-01/preflight.json` で対象経路の適格性を確認してから、測定結果の `summary.md`、`summary.csv`、`trials/per-run.json`、各試行の `warmup.json` と `telemetry.json` を読みます。失敗や未収束の試行を倍率に混ぜないでください。JRuby 4 構成の各3回の収束測定は、Actions の「Benchmark Pipeline」を手動起動して profile `ci-jruby-convergence` を選びます。PR 自動実行は短い読み取りと正常系 CRUD の検証までです。収束試験は最大600秒のウォームアップを許し、未収束が残れば失敗します。ホスト上の予備比較であり容量順位ではありません。
 
 正常系 CRUD の機能と測定経路は同じ事前検証を使って確認できます。`crud.yml` は読み取り・更新、`crud-create-delete.yml` は作成・削除です。各試行の `database_check` が `passed` で、状態が `verified` なら HTTP と書き込み後の SQLite 状態が一致しています。これらの短時間プロファイルは性能比較のサンプルには含めません。
 
