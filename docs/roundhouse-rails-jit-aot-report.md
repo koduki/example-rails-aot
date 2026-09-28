@@ -2,11 +2,11 @@
 
 **更新日:** 2026-09-28
 
-**対象:** このリポジトリの小規模な記事・コメントアプリ。数値は[初回 smoke](benchmark-results.md)と[JRuby 収束パイロット](https://github.com/koduki/example-rails-aot/actions/runs/36362615236)の歴史的 artifact に属する。
+**対象:** このリポジトリの小規模な記事・コメントアプリ。数値は[現行正本の smoke](https://github.com/koduki/example-rails-aot/actions/runs/36380159185)、[初回 smoke](benchmark-results.md)、[JRuby 収束パイロット](https://github.com/koduki/example-rails-aot/actions/runs/36362615236)を区別して示す。
 
 ## 1. サマリー
 
-Rails アプリを Roundhouse で変換して生成 Ruby または Spinel ネイティブ実行ファイルとして動かすと、このアプリの GET /articles では元の Rails より高い**観測処理量**を示した。CRuby の10秒 smoke で変換後／Rails は YJIT Off **8.38倍**、On **6.75倍**。別の JRuby 収束パイロットで各構成の3反復中央値から計算すると、JRuby compile.mode=OFF **10.87倍**、JIT **7.49倍**だった。
+Rails アプリを Roundhouse で変換して生成 Ruby または Spinel ネイティブ実行ファイルとして動かすと、このアプリの GET /articles では元の Rails より高い**観測処理量**を示した。現行正本の CRuby 10秒 smoke で生成 Ruby／Rails は YJIT Off **7.49倍**、On **5.61倍**。別コミットの JRuby 収束パイロットで各構成の3反復中央値から計算すると、JRuby compile.mode=OFF **10.87倍**、JIT **7.49倍**だった。
 
 JIT を On にすると**絶対 RPS は両方のアプリ形状で上がる**。下がったのは「変換後／Rails」という相対倍率である。JRuby では Rails/JIT On の反復が **105、301、314 RPS** と大きくばらつくため、変換と JIT の相互作用の大きさ、その内部機構を確定できない。
 
@@ -14,10 +14,10 @@ JIT を On にすると**絶対 RPS は両方のアプリ形状で上がる**。
 | --- | --- | --- |
 | Roundhouse | 限定した読み取りで生成 Ruby の観測 RPS が高い | 一般の Rails アプリで同じ倍率、最大持続容量 |
 | YJIT / JRuby のモード | 各実験の On が Off より高い RPS。変換の相対倍率は On で小さい | JIT 内部のコンパイル効率、CRuby と JRuby の優劣 |
-| Spinel | 初回 smoke で 4,353 RPS、最大コンテナ使用量 12.54 MB | AOT コンパイラ単独の効果、起動時間やクラウド費用 |
+| Spinel | 現行 smoke で 4,516.54 RPS、最大コンテナ使用量 12.63 MB | AOT コンパイラ単独の効果、起動時間やクラウド費用 |
 | 機能 | 読み取り5経路が preflight 適格。正常系 CRUD の短い CI は9構成すべて verified | 無効入力の完全一致、CSRFを有効にしたアプリとの互換性、CRUD容量 |
 
-**解釈上の境界:** hosted runner の小さな fixture によるパイロット観測である。今回、正本アプリを Rails 8.0.5.1・CSRF無効の検証 fixture に揃えた。**新しいコミットの preflight と性能測定を別の結果として扱う**。過去の artifact を新しいソースの実測値として読み替えない。
+**解釈上の境界:** hosted runner の小さな fixture によるパイロット観測である。正本を Rails 8.0.5.1・CSRF無効に揃えた後、[AOT 全ジョブ](https://github.com/koduki/example-rails-aot/actions/runs/36380159179)と[測定 CI](https://github.com/koduki/example-rails-aot/actions/runs/36380159185)が成功した。現行 smoke と過去の artifact を同一反復系列として合算しない。
 
 ## 2. アーキテクチャと比較の単位
 
@@ -54,8 +54,8 @@ Roundhouse の固定版 v2026.9.18 は Rails ソース・ERB・スキーマ・�
 | --- | --- | --- | --- |
 | H1: Roundhouse がリクエスト時の Rails 抽象化を減らす | 同じ処理系・JIT設定で生成 Ruby の処理時間と割当が減る | CRuby と JRuby の限定 endpoint で生成側の観測 RPS が高い | CPU flamegraph、割当/GC、SQL・ルーティング・描画時間の分解 |
 | H2: 生成コードは JIT の最適化に向く | 同じ仕事量とウォームアップで JIT の寄与率または時間短縮が増す | **未確認**。両処理系で On の絶対 RPS は増えるが相対的な変換倍率は縮む | YJIT/JRuby/JVM のコンパイル統計、同一負荷の profile、反復した対照実験 |
-| H3: JRuby では長いウォームアップが結果を変える | 短い smoke と長い run の順位・倍率が変わり、同じ設定でも段階差が残りうる | 初回 emitted は unstable。後続12試行は通過したが Rails/JIT On に105→301→314 RPS の段差 | 長い事後観測、コンパイルログと GC、run 順序の交差 |
-| H4: Spinel の軽い実行スタックが有利 | ネイティブ構成のコンテナ資源・遅延が小さい | 初回 smoke の観測に整合 | 同等の HTTP/DB 層での対照、起動・アイドル・定常の反復測定 |
+| H3: JRuby では長いウォームアップが結果を変える | 短い smoke と長い run の順位・倍率が変わり、同じ設定でも段階差が残りうる | 初回 emitted は unstable。現行 smoke は Rails/JIT On 29.15 RPS。後続12試行は通過したが同じ Rails/JIT On に105→301→314 RPS の段差 | 長い事後観測、コンパイルログと GC、run 順序の交差 |
+| H4: Spinel の軽い実行スタックが有利 | ネイティブ構成のコンテナ資源・遅延が小さい | 現行・初回 smoke の観測に整合 | 同等の HTTP/DB 層での対照、起動・アイドル・定常の反復測定 |
 
 旧稿にあった「Ruby CPU が75%から38%へ減った」「SQLite/OSが62%を占める」「型ガード失敗が減った」「GCポーズが劇的に減った」は計測していない。アムダールの法則は改善不能部分を独立に特定して初めて量的説明に使える。今回は上の**仮説**として扱う。
 
@@ -65,6 +65,7 @@ Roundhouse の固定版 v2026.9.18 は Rails ソース・ERB・スキーマ・�
 
 | 実験 | コミット・成果物 | 対象と負荷 | 用途 |
 | --- | --- | --- | --- |
+| 現行正本 smoke | PR #40 の head `2b66fbb2c90752320926e2715a8c48c31bbd33c1`・[Actions #36380159185](https://github.com/koduki/example-rails-aot/actions/runs/36380159185)・[artifact](https://github.com/koduki/example-rails-aot/actions/runs/36380159185/artifacts/10953212083) | 7構成、各1回、GET /articles、4接続・10秒 closed-loop。Rails 8.0.5.1 正本と派生コピー | 新しい適格性、現行コミットの予備観測 |
 | 初回 smoke | e1dd3903de9dfcc8b87a16f222d0ebe43ca8c614・[Actions #36289166814](https://github.com/koduki/example-rails-aot/actions/runs/36289166814) | 主7構成、各1回、GET /articles、4接続・10秒 closed-loop。最大45秒ウォームアップ | 観測値と測定器の予備検証 |
 | JRuby 収束パイロット | f3c67327e71c074ece3622d8f18ef24f41c5263d・[Actions #36362615236](https://github.com/koduki/example-rails-aot/actions/runs/36362615236)・[artifact](https://github.com/koduki/example-rails-aot/actions/runs/36362615236/artifacts/10947538810) | JRuby 4構成×3回、GET /articles、4接続・30秒 closed-loop。ウォームアップ60～600秒 | JRuby モードの2×2と反復差 |
 | 正常系 CRUD CI | [同 Actions の artifact](https://github.com/koduki/example-rails-aot/actions/runs/36362615236/artifacts/10947538810) | 全9構成、低い固定投入率、read/update と create/delete | HTTP・DB 効果の機能確認のみ |
@@ -77,33 +78,42 @@ Roundhouse の固定版 v2026.9.18 は Rails ソース・ERB・スキーマ・�
 
 preflight は9構成の /articles、/articles/1、/articles/new、/articles.json、/articles/1.json を Rails 基準と比較した。動的トークンなど指定された値を正規化し、HTTP と DB の結果を照合する。合格は**この5読み取り経路**の適格性であり、全アプリの互換性ではない。
 
-変更前の正常な更新・作成・削除の CI は各シナリオで9/9 verified。測定後の DB を確認した。一方、無効入力の HTML エラー表現と JSON エラー形状には差が残る。**不正 CSRF トークンの拒否を試すケースは excluded** である。正本 Rails 自体が検証を無効化しているため、Rails と生成物がともに書き込んでも「拒否の同等性」とはならない。比較器は CSRF 用の meta/input 要素だけを無視し、記事フォームの値・HTTP・DB は引き続き比較する。レポートを外部公開する際にはこの制限を明示する。
+現行正本の[測定 CI](https://github.com/koduki/example-rails-aot/actions/runs/36380159185)では、9構成の読み取り5経路すべてが適格で、正常な read/update と create/delete も各9/9 `verified`。測定後の DB を確認した。CRUD の性能反復は **0/1** であり、操作/秒や操作 p99 の倍率は掲載しない。一方、無効入力の HTML エラー表現と JSON エラー形状には差が残る。**不正 CSRF トークンの拒否を試すケースは excluded** である。正本 Rails 自体が検証を無効化しているため、Rails と生成物がともに書き込んでも「拒否の同等性」とはならない。比較器は CSRF 用の meta/input 要素だけを無視し、記事フォームの値・HTTP・DB は引き続き比較する。レポートを外部公開する際にはこの制限を明示する。
 
 verified は5秒窓に数操作程度の機能確認であり、性能の passed とは異なる。CRUD の論理操作は update がフォーム取得＋更新、create/delete がフォーム取得＋作成＋削除の複数 HTTP 要求。レポーターは操作全体の遅延と**成功操作/秒**を別単位として扱い、HTTP 要求単位の raw 指標と混ぜない。現時点で比較に採用できる CRUD の収束・反復性能測定はない。
 
-## 5. 結果: CRuby と Spinel の初回 smoke
+## 5. 結果: CRuby と Spinel の現行 smoke
 
-下表とグラフは**同じ短い run の観測値**であり、容量順位ではない。初回の JRuby emitted はウォームアップ未収束のため、後の JRuby 図に含めない。
+下表は Rails 8.0.5.1 正本に揃えた後の[新しい成果物](https://github.com/koduki/example-rails-aot/actions/runs/36380159185/artifacts/10953212083)。各構成1回、同じ endpoint・closed-loop 負荷の**観測値**であり、持続容量の順位ではない。
 
 | 実行構成 | 状態 | RPS | p50 / p95 / p99 (ms) | 最大コンテナメモリ (MB) |
 | --- | --- | ---: | ---: | ---: |
-| Rails / CRuby YJIT Off | passed | 270.60 | 14.55 / 19.16 / 21.30 | 109.30 |
-| Rails / CRuby YJIT On | passed | 447.53 | 8.66 / 13.32 / 15.90 | 133.60 |
-| emitted / CRuby YJIT Off | passed | 2,268.48 | 1.72 / 2.54 / 2.98 | 41.58 |
-| emitted / CRuby YJIT On | passed | 3,021.03 | 1.29 / 1.99 / 2.42 | 50.16 |
-| emitted / Spinel AOT | passed | 4,353.36 | 0.89 / 1.17 / 1.25 | 12.54 |
+| Rails / CRuby YJIT Off | passed | 321.52 | 12.26 / 16.03 / 18.70 | 102.20 |
+| Rails / CRuby YJIT On | passed | 546.58 | 7.11 / 11.37 / 13.90 | 126.40 |
+| emitted / CRuby YJIT Off | passed | 2,407.74 | 1.61 / 2.46 / 3.03 | 41.89 |
+| emitted / CRuby YJIT On | passed | 3,066.75 | 1.24 / 1.96 / 2.62 | 50.16 |
+| emitted / Spinel AOT | passed | 4,516.54 | 0.88 / 1.16 / 1.25 | 12.63 |
 
 ~~~mermaid
 xychart-beta
-    title "初回 smoke: GET /articles の観測 RPS（各1回）"
+    title "現行正本 smoke: GET /articles の観測 RPS（各1回）"
     x-axis ["Rails Off", "Rails YJIT", "生成 Off", "生成 YJIT", "Spinel"]
-    y-axis "RPS" 0 --> 4500
-    bar [271, 448, 2268, 3021, 4353]
+    y-axis "RPS" 0 --> 4700
+    bar [322, 547, 2408, 3067, 4517]
 ~~~
 
-CRuby 内の2×2から、変換後／Rails は Off 2268.48 / 270.60 = **8.383**、On 3021.03 / 447.53 = **6.750**。YJIT On／Off は Rails **1.654**、生成側 **1.332**、相互作用比は **0.805**。YJIT On の観測絶対差は Rails **+176.93 RPS**、生成側 **+752.55 RPS**。**絶対差の増加と改善倍率の低下は同時に起こりうる**。この RPS 差を、持続的に追加で提供できる容量とは呼ばない。
+CRuby の2×2では生成 Ruby／Rails は Off **7.489**、On **5.611**。YJIT On／Off は Rails **1.700**、生成 Ruby **1.274**、相互作用比は **0.749**。Rails と生成 Ruby の双方で On の絶対 RPS は高いが、相対的な変換倍率は小さい。On の絶対差は Rails **+225.06 RPS**、生成 Ruby **+659.01 RPS** であり、倍率と差分は別の尺度である。
 
-Spinel / Rails CRuby Off の初回観測比は **16.09**。生成 Ruby の YJIT On と比べると **1.44**。どちらも HTTP サーバーと SQLite アダプターを含む全スタックの差である。起動時間、並列スケーリング、コストは測定していない。
+Spinel／Rails CRuby Off は **14.047**、Spinel／生成 Ruby YJIT On は約 **1.473**。前者は VM、HTTP、DB を含む実行スタック全体の比であり、AOT コンパイラ単独の効果ではない。
+
+| 異なるコミットの一回観測 | Rails CRuby Off / On | 生成 Ruby Off / On | 生成／Rails Off / On | 相互作用比 |
+| --- | ---: | ---: | ---: | ---: |
+| 初回 smoke、旧正本からの派生コピー | 270.60 / 447.53 | 2268.48 / 3021.03 | 8.383 / 6.750 | 0.805 |
+| 現行 smoke、Rails 8.0.5.1 正本 | 321.52 / 546.58 | 2407.74 / 3066.75 | 7.489 / 5.611 | 0.749 |
+
+初回は同じ Rails 8.0.5.1 の測定用コピーでも、元の `blog/` は 8.1.3.1 で、今回ソース hash・依存関係・比較方針も変わった。独立した hosted runner の一回観測なので、差分を Rails 版変更の因果効果と解釈しない。両方で **On による絶対改善と相対倍率の縮小**が再現した、という限定した頑健性の確認である。
+
+現行 smoke の Rails/JRuby JIT On は **29.15 RPS**、生成 JRuby JIT On は **1122.00 RPS**。この一回だけの比 **38.491** は後続の長い3反復中央値の **7.488** と大きく異なる。ウォームアップが短い JRuby の処理量を基準にした倍率は不安定であり、下節の JRuby 2×2に混ぜない。
 
 ## 6. 結果: JRuby の2×2とウォームアップ
 
@@ -138,22 +148,23 @@ JRuby の OFF は **JRuby 自身の compile.mode=OFF** であり、HotSpot の J
 
 ## 7. CRuby と JRuby の傾向をどう読むか
 
-両方の実験で On は Rails、生成側それぞれの RPS を上げ、Roundhouse の**相対倍率**は On で小さくなった。だが CRuby の YJIT と JRuby の compile.mode は別の操作で、CRuby は一回10秒、JRuby は別 run の長い3反復。JRuby OFF でも JVM JIT は動く。次の表は**同条件の処理系対決ではない**。
+CRuby の2回の smoke と JRuby の長いパイロットで On は Rails、生成側それぞれの RPS を上げ、Roundhouse の**相対倍率**は On で小さくなった。だが CRuby の YJIT と JRuby の compile.mode は別の操作で、CRuby は一回10秒、JRuby は別 run の長い3反復。JRuby OFF でも JVM JIT は動く。次の表は**同条件の処理系対決ではない**。
 
 | 実験 | Rails の On / Off | 生成側の On / Off | 変換倍率の On / Off 間相互作用 |
 | --- | ---: | ---: | ---: |
 | CRuby 初回 smoke | 1.654 | 1.332 | 0.805 |
+| CRuby 現行 smoke | 1.700 | 1.274 | 0.749 |
 | JRuby 後続パイロット、中央値比 | 3.170 | 2.183 | 0.689（反復差に注意） |
 
-変換後に元の Rails より少ない仕事で応答するなら、JIT が改善できる部分の割合、サーバーの待ち、DB/HTTP の比重も変わりうる。この説明は**候補**であり、旧稿が示した Ruby 実行時間や SQLite/OS の割合は測っていない。「JRuby の JIT が YJIT より強い」「Roundhouse は JRuby の方が効く」「JIT と Roundhouse の相性が悪い」のいずれも、この2実験を跨いで断定できない。
+変換後に元の Rails より少ない仕事で応答するなら、JIT が改善できる部分の割合、サーバーの待ち、DB/HTTP の比重も変わりうる。この説明は**候補**であり、旧稿が示した Ruby 実行時間や SQLite/OS の割合は測っていない。「JRuby の JIT が YJIT より強い」「Roundhouse は JRuby の方が効く」「JIT と Roundhouse の相性が悪い」のいずれも、これら異なる実験条件を跨いで断定できない。
 
 検証には同一コミット・ホスト・fixture・endpoint・負荷条件で CRuby/JRuby の8構成を交差順序で反復する。ウォームアップだけでなく測定後の長い窓も記録し、Rails/JRuby JIT On の段差を追う。速度の基準 run と、JIT/GC/CPU 診断フラグを有効にした run は分ける。
 
 ## 8. 実務的な評価と次の実験
 
-| 優先 | 実験 | 合格・解釈の条件 |
+| 優先 | 項目 | 合格・解釈の条件 |
 | --- | --- | --- |
-| 1 | 新しい正本 Rails 8.0.5.1 で全ターゲットを再 build・preflight | ソース hash、lockfile、イメージ ID、HTTP/DB 比較、CSRF 除外を保存。歴史的値と別系列にする |
+| 1 | 現行正本の9構成 preflight と AOT ビルドは完了 | [CI の成果物](https://github.com/koduki/example-rails-aot/actions/runs/36380159185/artifacts/10953212083)の source hash、lockfile、イメージ ID、HTTP/DB 比較、CSRF 除外を今後の比較の基準にする |
 | 2 | CRuby/JRuby 8構成の同条件反復 | 反復ごとの分布とドリフトを示す。局所窓だけで JRuby の定常段階を確定しない |
 | 3 | k6 open-arrival の段階的負荷率探索 | 同一 SLO の p99・失敗率・drop・クライアント余力で容量を定義。固定 offered rate はその負荷における遅延・資源比較に限定 |
 | 4 | 正常系 CRUD の長時間反復 | 操作全体の成功操作/秒・p50/p95/p99を用いる。無効入力と CSRF 保護の欠落は性能と別に評価 |
@@ -161,4 +172,4 @@ JRuby の OFF は **JRuby 自身の compile.mode=OFF** であり、HotSpot の J
 
 専用 GCE 実機での容量測定は未実施。[実行契約](benchmark.md)の full.yml は7構成×5経路×5反復、計175試行で、最短ウォームアップと測定だけで14時間35分を要する。アプリと負荷生成器の論理 CPU だけでなく、SMT sibling も分離する必要がある。
 
-**結論:** 小さな読み取り workload では Roundhouse 出力が有望で、Spinel は全スタックとしてさらに軽い観測値を出した。JIT On は絶対 RPS を改善する一方、Roundhouse の相対倍率は今回の両パイロットで縮んだ。JRuby の段差と異なる実験条件があるため、処理系ごとの差や原因を確定する段階には達していない。CSRFを無効化した実験アプリの結果を、保護された本番 Rails アプリへの導入効果と混同しない。
+**結論:** 小さな読み取り workload では Roundhouse 出力が有望で、Spinel は全スタックとしてさらに軽い観測値を出した。JIT On は絶対 RPS を改善する一方、Roundhouse の相対倍率はCRuby の2回の smoke と JRuby の反復中央値で縮んだ。JRuby の段差と異なる実験条件があるため、処理系ごとの差や原因を確定する段階には達していない。CSRFを無効化した実験アプリの結果を、保護された本番 Rails アプリへの導入効果と混同しない。

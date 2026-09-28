@@ -61,7 +61,7 @@ Linux x86-64 + Docker の同じ CLI、コンテナ、結果 schema を維持す�
 
 [初回結果](benchmark-results.md)は GitHub Actions Run `36289166814` の closed-loop smoke（各構成1回・10秒）として公開した。CRuby での Roundhouse / Rails の観測 RPS 比は JIT Off で 8.38、YJIT で 6.75、YJIT の相互作用比は 0.805、Spinel / Rails CRuby Off は 16.09 だった。定常性能の容量比や内部機構を実証した値ではない。JRuby emitted はウォームアップが未収束で比較から除外する。メモリ列はコンテナ使用量でありプロセス RSS ではない。
 
-preflight では5種類の読み取りが一致した。その後、測定用 Rails コピーの CSRF 検証を無効化し、正常系の更新・作成削除に限定した CRUD 機能確認を全9構成で追加した。現在は正本も同じ Rails 8.0.5.1・CSRF無効の実験方針に揃えたが、変更後の再測定は別 run が必要である。短い CI の成功は `verified` であり性能倍率には含めない。CSRF 不正トークン拒否は検証対象外、無効書き込みの HTML、JSON エラー形状には差異が残る。不正 CSRF ケースは参照用 Rails 自体が拒否しないため `excluded`。Actions の要約は不正トークン時の HTTP ステータスと DB 書き込みの有無を表示する。
+preflight では5種類の読み取りが一致した。その後、測定用 Rails コピーの CSRF 検証を無効化し、正常系の更新・作成削除に限定した CRUD 機能確認を全9構成で追加した。現在は正本も同じ Rails 8.0.5.1・CSRF無効の実験方針に揃え、[新しい測定 CI](https://github.com/koduki/example-rails-aot/actions/runs/36380159185)で事前比較と短い smoke、正常系 CRUD を再実行した。旧値と同一系列にはしない。短い CI の成功は `verified` であり性能倍率には含めない。CSRF 不正トークン拒否は検証対象外、無効書き込みの HTML、JSON エラー形状には差異が残る。不正 CSRF ケースは参照用 Rails 自体が拒否しないため `excluded`。Actions の要約は不正トークン時の HTTP ステータスと DB 書き込みの有無を表示する。
 
 ## 6. 補助評価の実装状況：#21
 

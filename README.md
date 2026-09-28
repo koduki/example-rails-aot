@@ -19,6 +19,8 @@ Rails アプリを [Roundhouse](https://github.com/rubys/roundhouse) で変換�
 
 アーキテクチャ、仮説、測定、CRuby/JRuby の差と限界は [**Roundhouse × Rails × JIT / Spinel AOT 検証レポート**](docs/roundhouse-rails-jit-aot-report.md) を参照してください。
 
+[現行正本の Actions 実行 36380159185](https://github.com/koduki/example-rails-aot/actions/runs/36380159185)で Rails 8.0.5.1・CSRF無効のアプリを再ビルドしました。9構成の読み取り5経路が適格で、正常系 CRUD の read/update と create/delete は各9/9 `verified`。1回10秒の `GET /articles` smoke では CRuby の生成 Ruby／Rails が YJIT Off **7.49倍**、On **5.61倍**でした。Rails・生成 Ruby とも On の絶対 RPS は上がります。JRuby の短い smoke はウォームアップ依存が大きく、処理系間の倍率比較には使いません。[成果物](https://github.com/koduki/example-rails-aot/actions/runs/36380159185/artifacts/10953212083)と[分析](docs/roundhouse-rails-jit-aot-report.md)を参照してください。
+
 [初回速報レポート](docs/benchmark-results.md)は [Actions 実行 36289166814](https://github.com/koduki/example-rails-aot/actions/runs/36289166814) の**歴史的な予備測定**です。測定コミットは `e1dd3903de9dfcc8b87a16f222d0ebe43ca8c614`。当時の正本は Rails 8.1.3.1 で、測定用コピーは Rails 8.0.5.1 でした。現在の正本に対する再測定値ではありません。GitHub hosted runner 上で、同じ3記事・3コメントの SQLite fixture を使い、`GET /articles` を各構成1回、4接続・10秒の closed-loop 方式で測定しました。以下はその試行での観測値です。
 
 | 実行系 | ターゲット ID | JIT | Roundhouse | RPS | p50 | p95 | コンテナメモリ最大 | 判定 |
@@ -36,7 +38,7 @@ Rails アプリを [Roundhouse](https://github.com/rubys/roundhouse) で変換�
 
 この短い試行の処理量比は、Roundhouse／Rails が CRuby JIT Off で **8.38 倍**、YJIT On で **6.75 倍**、Spinel／Rails CRuby JIT Off が **16.09 倍**でした。YJIT On／Off は Rails で **1.65 倍**、変換後 Ruby で **1.33 倍**、両倍率の比は **0.805** です。JRuby JIT Off は初回測定の7構成に含まれず、JIT 有無の効果はこの表から比較できません。Roundhouse 変換後の JRuby JIT On はウォームアップが収束せず、順位付けや倍率比較に使いません。JRuby JIT Off にしても JVM JIT は有効です。メモリはコンテナ使用量でありプロセス RSS ではありません。
 
-初回の事前比較では全9構成の5種類の読み取り経路が適格でした。その後、正常系の更新と作成・削除を別シナリオで検証できるようにしました。現在は正本も測定用コピーも CSRF 検証が無効です。[CRUD 検証手順](docs/benchmark.md#benchmark-only-crud-scope)を参照してください。無効な書き込みの HTML 表示と JSON バリデーションエラーには差が残ります。不正 CSRF トークンの拒否は比較対象から除外します。アプリ全体の同等性は未達です。上記の倍率は最大処理容量や JIT の因果的な寄与を示しません。専用 GCE ホストでの反復測定、open-arrival 負荷での容量探索は未実施です。条件、p95/p99、CPU、除外理由、次の検証項目は[検証レポート](docs/roundhouse-rails-jit-aot-report.md)に記載しています。
+現行正本の事前比較でも全9構成の5種類の読み取り経路が適格でした。その後、正常系の更新と作成・削除を別シナリオで検証できるようにしました。現在は正本も測定用コピーも CSRF 検証が無効です。[CRUD 検証手順](docs/benchmark.md#benchmark-only-crud-scope)を参照してください。無効な書き込みの HTML 表示と JSON バリデーションエラーには差が残ります。不正 CSRF トークンの拒否は比較対象から除外します。アプリ全体の同等性は未達です。上記の倍率は最大処理容量や JIT の因果的な寄与を示しません。専用 GCE ホストでの反復測定、open-arrival 負荷での容量探索は未実施です。条件、p95/p99、CPU、除外理由、次の検証項目は[検証レポート](docs/roundhouse-rails-jit-aot-report.md)に記載しています。
 
 [後続の Actions 実行 36320457786](https://github.com/koduki/example-rails-aot/actions/runs/36320457786)では、JRuby JIT Off を含む**全9構成**で正常系の読み取り・更新と作成・削除がそれぞれ **9/9 件 `verified`** でした。各試行の DB 照合は成功し、HTTP 失敗・反復 drop はゼロです。これは低負荷の機能確認であり、上表の処理量・遅延との比較や性能倍率には使いません。[生データ](https://github.com/koduki/example-rails-aot/actions/runs/36320457786/artifacts/10932791366)を参照してください。
 
