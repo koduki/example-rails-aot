@@ -52,7 +52,7 @@ resource "google_compute_instance" "bench" {
     # No access_config: outbound uses the existing Cloud NAT.
   }
 
-  metadata = { enable-oslogin = "TRUE" }
+  metadata                = { enable-oslogin = "TRUE" }
   metadata_startup_script = file("${path.module}/${each.value.startup}")
   service_account {
     email  = google_service_account.bench_runner.email

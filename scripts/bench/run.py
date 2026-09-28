@@ -728,7 +728,7 @@ def main():
         print(json.dumps(plan,indent=2)); return 0
     output = Path(output_path).resolve(); output.mkdir(parents=True,exist_ok=False)
     save(output/'plan.json',plan)
-    save(output/'env.json', {'schema_version':1,'platform':platform.platform(),'python':sys.version,
+    environment = {'schema_version':1,'platform':platform.platform(),'python':sys.version,
          'cpuinfo':Path('/proc/cpuinfo').read_text() if Path('/proc/cpuinfo').exists() else '',
          'cpus':cpus,
          'git_commit':command(['git','rev-parse','HEAD']), 'git_status':command(['git','status','--porcelain']),
@@ -736,7 +736,14 @@ def main():
          'target_sha256':hashlib.sha256((ROOT/'bench/targets.yml').read_bytes()).hexdigest(),
          'docker_version':command(['docker','version','--format','{{json .}}'], check=False) if shutil.which('docker') else None,
          'cpu_smt_siblings':{str(c):Path(f'/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list').read_text().strip()
-             for c in cpus['app']+cpus['client'] if Path(f'/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list').exists()}})
+             for c in cpus['app']+cpus['client'] if Path(f'/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list').exists()}}
+    if remote:
+        environment['tester_environment'] = RemoteLoadGenerator(remote, zone, project).probe()
+        environment['private_rtt'] = command(['ping', '-c', '5', th_val], timeout=15, check=False) if shutil.which('ping') else 'ping unavailable'
+        environment['app_environment'] = command(['uname', '-a'])
+    environment['image_ids'] = {stage: command(['docker', 'image', 'inspect', '--format', '{{.Id}}', 'rails-aot-bench:' + stage], check=False)
+        for stage in sorted({TARGETS['targets'][t]['image'] for t in p['targets']})} if shutil.which('docker') else {}
+    save(output/'env.json', environment)
     def interrupt(*_):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM,interrupt)

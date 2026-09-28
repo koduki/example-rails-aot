@@ -26,6 +26,14 @@ class RemoteLoadGenerator:
             raise ValueError('Remote tester instance, zone and project are required')
         self.instance, self.zone, self.project = instance, zone, project
 
+    def probe(self):
+        query = 'k6 version; uname -a; lscpu; cat /sys/fs/cgroup/cgroup.controllers; free -b'
+        result = subprocess.run(remote_command(self.instance, self.zone, self.project, query),
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90)
+        if result.returncode:
+            raise RuntimeError('Tester environment probe failed: ' + result.stdout[-1000:])
+        return result.stdout
+
     def run(self, script, env, directory, timeout):
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
