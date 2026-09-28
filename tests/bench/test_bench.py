@@ -82,6 +82,14 @@ class BenchmarkTests(unittest.TestCase):
         emitted['body'] = emitted['body'].replace('value="A"', 'value="B"')
         self.assertNotEqual(preflight.canonical(rails), preflight.canonical(emitted))
 
+    def test_aot_html_comparison_keeps_method_and_invalid_field_content(self):
+        rails = '<main><div class="field_with_errors"><label>Title</label></div><input autocomplete="off" name="_method" value="delete"></main>'
+        emitted = '<main><label>Title</label><input name="_method" value="delete"></main>'
+        self.assertEqual(preflight.legacy.normalize_html(rails),
+                         preflight.legacy.normalize_html(emitted))
+        self.assertNotEqual(preflight.legacy.normalize_html(rails),
+                            preflight.legacy.normalize_html(emitted.replace('delete', 'patch')))
+
     def test_probe_rejects_jit_and_db_mismatch(self):
         info={'runtime':'ruby','jit':'off','yjit_enabled':True,'pragmas':preflight.PRAGMAS}
         response={'status':200,'body':json.dumps(info)}

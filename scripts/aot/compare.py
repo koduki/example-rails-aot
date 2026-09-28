@@ -152,11 +152,17 @@ def normalize_html(html_text):
     # 6. Normalize asset fingerprinted paths or varying asset domains
     s = re.sub(r'/assets/[a-zA-Z0-9_\-]+-[a-f0-9]{32,64}\.(css|js)', r'/assets/[ASSET].\1', s)
 
-    # 7. Normalize field_with_errors wrapper divs and form validation styling nuances
-    s = re.sub(r'</?div[^>]*class="field_with_errors"[^>]*>', '', s)
+    # 7. Rails wraps an invalid field in a div. Remove the complete wrapper,
+    # keeping its field; removing only its opening tag leaves a stray </div>.
+    s = re.sub(r'<div\b[^>]*class="field_with_errors"[^>]*>(.*?)</div>', r'\1', s, flags=re.S)
     s = re.sub(r'border-(?:gray|red)-400', 'border-[COLOR]-400', s)
     s = re.sub(r'focus:outline-(?:blue|red)-600', 'focus:outline-[COLOR]-600', s)
     s = re.sub(r'\s+value=""', '', s)
+
+    # Rails 8.0 adds autocomplete=off to the hidden method field. The method
+    # name and value still participate in the structural comparison.
+    s = re.sub(r'<input\b(?=[^>]*\bname="_method")[^>]*>',
+               lambda match: re.sub(r'\s+autocomplete="off"', '', match.group()), s)
 
     # 8. Canonicalize tag attributes (order invariance)
     s = canonicalize_tags(s)
