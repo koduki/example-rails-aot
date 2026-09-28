@@ -75,6 +75,7 @@ jobs:
           fi
           cat bench-results/unit.log
           python3 scripts/bench/run.py run --profile bench/profiles/gce-c3-capacity.yml --remote-loadgen bench-loadgen-c3 --gce-project PROJECT_ID --gce-zone asia-northeast1-b --target-host APP_PRIVATE_IP --app-cpus 0,1,2,3 --dry-run > benchmark-plan-gce-c3.json
+          python3 scripts/bench/run.py preflight --profile bench/profiles/ci-pagination.yml --dry-run > benchmark-plan-ci-pagination.json
           python3 scripts/bench/run.py run --profile bench/profiles/smoke.yml --dry-run > benchmark-plan-smoke.json
           python3 scripts/bench/run.py run --profile bench/profiles/quick.yml --dry-run > benchmark-plan-quick.json
           python3 scripts/bench/run.py run --profile bench/profiles/ci-jruby-convergence.yml --dry-run > benchmark-plan-ci-jruby-convergence.json
@@ -126,6 +127,12 @@ jobs:
           python3 scripts/bench/run.py preflight \
             --targets rails-cruby-off,rails-cruby-yjit,emit-cruby-off,emit-cruby-yjit,rails-jruby,emit-jruby,spinel,rails-jruby-off,emit-jruby-off \
             --output bench-results/preflight
+
+      - name: Verify 1000-article 20-result pagination on all nine targets
+        run: |
+          python3 scripts/bench/run.py preflight \
+            --profile bench/profiles/ci-pagination.yml \
+            --output bench-results/pagination-preflight
 
       - name: Execute sequential benchmark trials (same measurement job)
         run: |

@@ -16,6 +16,7 @@ def read(path):
 def generate():
     builds = read(ROOT / 'bench-results/build/images.json')
     checks = read(ROOT / 'bench-results/preflight/preflight.json')
+    pagination = read(ROOT / 'bench-results/pagination-preflight/preflight.json')
     trial = read(ROOT / 'bench-results/measurement/report.json')
     tests = read(ROOT / 'bench-results/unit-status.json')
     tf = read(ROOT / 'bench-results/terraform-status.json')
@@ -31,6 +32,7 @@ def generate():
         lines.append(f'| `{target}` | {"passed" if spec["image"] in stages else "missing"} | {probe} | {"/articles?page=1" in check.get("eligible_endpoints", [])} |')
     lines += ['', '## Functional and trial status', '',
               f'- CRUD preflight cases: {sum(checks.get(t, {}).get("cases", {}).get("update", {}).get("status") == "passed" for t in TARGETS)}/{len(TARGETS)} update; {sum(checks.get(t, {}).get("cases", {}).get("create", {}).get("status") == "passed" for t in TARGETS)}/{len(TARGETS)} create.',
+              f'- 1000-article page correctness: {sum("/articles?page=1" in pagination.get(t, {}).get("eligible_endpoints", []) for t in TARGETS)}/{len(TARGETS)} targets.',
               f'- Short smoke statuses: `{trial.get("trial_status_counts", {})}`.',
               f'- Harness unit tests: `{tests.get("status", "unknown")}`.',
               f'- Terraform fmt/init/validate: `{tf.get("status", "unknown")}`.', '',

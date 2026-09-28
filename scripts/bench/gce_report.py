@@ -84,7 +84,7 @@ def generate(root):
         per_rep = ', '.join(f"{entry['repetition']}: {entry['ratio']:.3f}" for entry in result['pairs'])
         lines.append(f'| `{key}` | {result["median"] if result["median"] is not None else "—"} | {result["min"] if result["min"] is not None else "—"} | {result["max"] if result["max"] is not None else "—"} | {result["iqr"] if result["iqr"] is not None else "—"} | {per_rep} |')
     lines += ['', '## Warmup, CPU and memory', '',
-              'Each trial stores warmup windows, Docker telemetry, capacity-search steps, and tester mpstat/network/memory artifacts. Inspect per-repetition tier differences for JRuby before drawing a JIT conclusion.', '',
+              'Each trial stores warmup windows, per-step Docker telemetry, capacity-search steps, and tester mpstat/network/memory artifacts. Summary app CPU/memory refers to the confirmation interval (including remote orchestration). Inspect per-repetition tier differences for JRuby before drawing a JIT conclusion.', '',
               '## Spinel interpretation and limitations', '',
               'Spinel includes native compilation, HTTP, DB adapter, scheduling and memory management. The measured difference is attributable to the Roundhouse + Spinel execution architecture as a whole, not the AOT compiler alone.',
               'SQLite single-writer contention remains even when CRUD writes use different article IDs. Hosted Actions smoke observations are excluded from this report.', '',

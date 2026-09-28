@@ -216,6 +216,15 @@ def warmup_valid(windows):
 def tag(target):
     return 'rails-aot-bench:' + TARGETS['targets'][target]['image']
 
+def throttled_count(cpu_stat):
+    if not isinstance(cpu_stat, str):
+        return None
+    for line in cpu_stat.splitlines():
+        if line.startswith('nr_throttled '):
+            return int(line.split()[1])
+    return None
+
+
 def docker_port_mapping(profile):
     """Bind a fixed private-reachable port only in two-VM mode."""
     host = '0.0.0.0' if profile.get('remote_loadgen') else '127.0.0.1'
@@ -571,17 +580,34 @@ def trials(p, cpus, output, checks):
                         telemetry = {'status': 'unavailable', 'reason': 'Collector could not be started'}
                         try:
                             import collect
-                            collector = collect.ResourceCollector(server.name, interval=1.0)
-                            collector.start()
+                            if not p.get('capacity_search'):
+                                collector = collect.ResourceCollector(server.name, interval=1.0)
+                                collector.start()
                         except Exception as e:
+                            if p.get('capacity_search'):
+                                raise RuntimeError('App telemetry collector unavailable: ' + str(e)) from e
                             telemetry = {'status': 'unavailable', 'reason': str(e)}
                         try:
                             if p.get('capacity_search'):
                                 def measure(rate, duration, phase):
+                                    nonlocal telemetry
                                     step_dir = directory / f'{len(steps_seen):03d}-{phase}-{rate}'
                                     steps_seen.append(str(step_dir))
                                     save(directory / 'progress.json', {'target': trial['target'], 'repetition': trial['repetition'], 'phase': phase, 'rate': rate, 'step': len(steps_seen)})
-                                    measured_step = sample(server, trial['endpoint'], duration, p, cpus, step_dir, rate=rate, phase=phase)
+                                    step_collector = collect.ResourceCollector(server.name, interval=1.0)
+                                    before_cpu = server.record_cpu(f'{len(steps_seen):03d}-cpu-before.json')
+                                    step_collector.start()
+                                    try:
+                                        measured_step = sample(server, trial['endpoint'], duration, p, cpus, step_dir, rate=rate, phase=phase)
+                                    finally:
+                                        step_telemetry = step_collector.stop()
+                                        after_cpu = server.record_cpu(f'{len(steps_seen):03d}-cpu-after.json')
+                                        a = throttled_count(after_cpu.get('cpu.stat'))
+                                        b = throttled_count(before_cpu.get('cpu.stat'))
+                                        step_telemetry['summary']['throttled_periods_delta'] = a - b if a is not None and b is not None else None
+                                        save(step_dir / 'app-telemetry.json', step_telemetry)
+                                        if phase == 'confirm':
+                                            telemetry = step_telemetry
                                     save(directory / 'last-step.json', {'phase': phase, 'rate': rate, 'measurement': measured_step})
                                     return measured_step
                                 steps_seen = []
@@ -623,7 +649,10 @@ def trials(p, cpus, output, checks):
                             if scenario == 'mix':
                                 has_errors = has_errors or operations.get('reads', 0) == 0
                         if p.get('capacity_search'):
-                            has_errors = has_errors or result['status'] != 'pass'
+                            has_errors = (has_errors or result['status'] != 'pass' or
+                                telemetry.get('summary', {}).get('sample_count', 0) == 0 or
+                                (telemetry.get('summary', {}).get('throttled_periods_delta') or 0) > 0 or
+                                telemetry.get('summary', {}).get('oom_killed', False))
                         final_status = 'failed' if has_errors else (
                             'verified' if verification_only else ('unstable' if not ready else 'passed'))
                         row['status'] = final_status
