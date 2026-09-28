@@ -25,14 +25,8 @@ jobs:
         with:
           ruby-version: '3.4.5'
           bundler: '2.6.9'
-          bundler-cache: false
+          bundler-cache: true
           working-directory: blog
-      - name: Resolve Rails fixture dependencies
-        run: (cd blog && bundle install)
-      - uses: actions/upload-artifact@v4
-        with:
-          name: resolved-blog-lock-${{ github.sha }}
-          path: blog/Gemfile.lock
       - uses: actions/setup-node@v4
         with:
           node-version: '22.14.0'

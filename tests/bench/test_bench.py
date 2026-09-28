@@ -74,6 +74,14 @@ class BenchmarkTests(unittest.TestCase):
         b['body']=b['body'].replace('Title','Wrong')
         self.assertNotEqual(preflight.canonical(a),preflight.canonical(b))
 
+    def test_disabled_csrf_markup_is_excluded_but_form_fields_are_compared(self):
+        base = {'status': 200, 'content_type': 'text/html', 'location': None}
+        rails = dict(base, body='<main><form><input name="article[title]" value="A"></form></main>')
+        emitted = dict(base, body='<main><form><input name="authenticity_token" value="token"><input name="article[title]" value="A"></form></main>')
+        self.assertEqual(preflight.canonical(rails), preflight.canonical(emitted))
+        emitted['body'] = emitted['body'].replace('value="A"', 'value="B"')
+        self.assertNotEqual(preflight.canonical(rails), preflight.canonical(emitted))
+
     def test_probe_rejects_jit_and_db_mismatch(self):
         info={'runtime':'ruby','jit':'off','yjit_enabled':True,'pragmas':preflight.PRAGMAS}
         response={'status':200,'body':json.dumps(info)}

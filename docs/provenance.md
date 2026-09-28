@@ -13,9 +13,9 @@ Issues #1–#4 are implemented together. The Rails baseline and fixed tools are 
 
 ## Generated application
 
-`blog/` was generated on GitHub Actions from Rails 8.1.3.1 using Ruby 3.4.5 and Bundler 2.6.9. The exact resolved gems are in `blog/Gemfile.lock`. The generator is the unchanged `scripts/create-blog` from Roundhouse v2026.9.18 (Git blob `3c89d6dc94340bbbb3a31d7957803c3c704fcf34`), vendored with its MIT license.
+The initial `blog/` was generated on GitHub Actions from Rails 8.1.3.1 using Ruby 3.4.5 and Bundler 2.6.9. That is historical provenance for early runs, not the current app version. The generator is the unchanged `scripts/create-blog` from Roundhouse v2026.9.18 (Git blob `3c89d6dc94340bbbb3a31d7957803c3c704fcf34`), vendored with its MIT license.
 
-The wrapper removes newly generated credentials, fixes the Rails dependency to exactly 8.1.3.1, and prepares the schema/seeds. The checked-in schema and migrations came from the generator. Gem lockfiles are committed; ordinary CI runs do not regenerate application source.
+The canonical checked-in fixture now pins **Rails 8.0.5.1**, matching the benchmark adapter's JRuby-compatible Rails line. Its Gemfile, lockfile, application defaults, schema, and migrations are kept together. The fixture disables CSRF verification for both AOT and benchmark paths; this explicitly narrows the security behavior under test. `scripts/bench/prepare_app.py` no longer rewrites Rails 8.1 syntax, but still derives an isolated app with JRuby dependencies and measurement settings. The wrapper removes newly generated credentials and pins the Rails dependency. Ordinary CI runs do not regenerate application source. New source hashes require a fresh preflight; historical benchmark artifacts remain tied to their original commits.
 
 ## Native tools
 
