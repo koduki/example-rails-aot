@@ -19,6 +19,21 @@ def remote_copy(instance, zone, project, source, destination, inbound=False):
             f'--project={project}', '--quiet', src, dst]
 
 
+def network_errors(text):
+    """Sum NIC receive/transmit errors and drops from /proc/net/dev."""
+    total = 0
+    for line in text.splitlines():
+        if ':' not in line:
+            continue
+        name, metrics = line.split(':', 1)
+        if name.strip() == 'lo':
+            continue
+        fields = metrics.split()
+        if len(fields) >= 16:
+            total += sum(int(fields[i]) for i in (2, 3, 10, 11))
+    return total
+
+
 class RemoteLoadGenerator:
     """k6 always runs on the tester; transfer every artifact into the app trial directory."""
     def __init__(self, instance, zone, project):
@@ -85,6 +100,9 @@ class RemoteLoadGenerator:
                             pass
                 data = json.loads(summary.read_text())
                 data['tester_cpu_pct'] = sum(samples) / len(samples) if samples else None
+                before = network_errors((directory / 'network-before.txt').read_text())
+                after = network_errors((directory / 'network-after.txt').read_text())
+                data['tester_network_errors'] = max(0, after - before)
                 summary.write_text(json.dumps(data, indent=2) + '\n')
                 (directory / 'tester-telemetry.json').write_text(json.dumps({'cpu_samples_pct': samples}, indent=2) + '\n')
             if execution.returncode:

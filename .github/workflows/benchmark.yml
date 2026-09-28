@@ -1,6 +1,7 @@
 name: Benchmark Pipeline
 on:
   push:
+    branches: [main]
     paths:
       - "bench/**"
       - "scripts/bench/**"
@@ -57,6 +58,8 @@ jobs:
     name: Benchmark execution and verification
     runs-on: ubuntu-24.04
     timeout-minutes: 240
+    env:
+      BENCH_CI: '1'
     steps:
       - uses: actions/checkout@v4
 

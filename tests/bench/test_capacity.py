@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/bench'))
 import capacity
 import gce_report
-from loadgen import RemoteLoadGenerator, remote_command, remote_copy
+from loadgen import RemoteLoadGenerator, remote_command, remote_copy, network_errors
 import run
 
 
@@ -42,6 +42,12 @@ class CapacityTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Client saturation'):
             capacity.search(lambda rate, *_: self.result(rate, iterations_dropped=1), self.profile)
         self.assertEqual(capacity.decision(self.result(100, rps_successful=50), self.profile), 'invalid_client')
+
+    def test_search_does_not_claim_maximum_without_upper_bound(self):
+        result = capacity.search(lambda rate, *_: self.result(rate), self.profile)
+        self.assertEqual(result['status'], 'upper_bound_not_found')
+        self.assertIsNone(result['capacity_rps'])
+        self.assertEqual(result['offered_rps'], self.profile['capacity_max_rps'])
 
     def test_confirmation_failure_invalidates_short_pass(self):
         outcome = capacity.search(lambda rate, duration, phase: self.result(rate, p99=150 if phase == 'confirm' or rate >= 200 else 20), self.profile)
@@ -83,6 +89,11 @@ class CapacityTests(unittest.TestCase):
             (root / 'trials/per-run.json').write_text(json.dumps(rows))
             gce_report.generate(root)
             self.assertIn('4/5 | —', (root / 'gce-summary.md').read_text())
+
+    def test_tester_network_errors_are_rejected(self):
+        raw = 'eth0: 10 2 1 1 0 0 0 0 10 2 3 4 0 0 0 0'
+        self.assertEqual(network_errors(raw), 9)
+        self.assertEqual(capacity.decision(self.result(100, tester_network_errors=1), self.profile), 'invalid_client')
 
     def test_remote_command_uses_private_network_and_isolation(self):
         ssh = remote_command('bench-loadgen-c3', 'asia-northeast1-b', 'demo', 'k6 version')

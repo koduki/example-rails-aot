@@ -344,7 +344,7 @@ def report(output):
     if profile.get('capacity_search'):
         import gce_report
         gce_report.generate(root)
-    elif not (profile.get('allow_unstable') and profile.get('repetitions') == 1):
+    elif not os.environ.get('BENCH_CI') and not (profile.get('allow_unstable') and profile.get('repetitions') == 1):
         import report as p1_report
         p1_report.build_report(root)
     return data

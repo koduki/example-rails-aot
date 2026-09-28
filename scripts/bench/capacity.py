@@ -5,7 +5,8 @@ import statistics
 def decision(measurement, profile):
     total = measurement.get('requests_total', 0)
     failed = measurement.get('requests_failed', 0)
-    if not total or measurement.get('client_saturated') or measurement.get('iterations_dropped', 0):
+    if (not total or measurement.get('client_saturated') or
+            measurement.get('iterations_dropped', 0) or measurement.get('tester_network_errors', 0)):
         return 'invalid_client'
     if profile.get('remote_loadgen') and measurement.get('tester_cpu_pct') is None:
         return 'invalid_client'
@@ -38,6 +39,12 @@ def search(measure, profile):
             break
         low = rate
         rate *= 2
+    if high is None and low < profile['capacity_max_rps']:
+        cap = profile['capacity_max_rps']
+        if probe(cap, profile['capacity_step_seconds'], 'upper-bound') == 'slo_fail':
+            high = cap
+        else:
+            low = cap
     if low == 0:
         raise RuntimeError('No sustainable starting rate; lower capacity_start_rps')
     if high is not None:
@@ -47,6 +54,9 @@ def search(measure, profile):
                 low = mid
             else:
                 high = mid
+    if high is None:
+        return {'offered_rps': low, 'capacity_rps': None, 'steps': steps,
+                'measurement': steps[-1]['measurement'], 'status': 'upper_bound_not_found'}
     # A short pass is not a sustainable result without a full confirmation.
     measured = measure(low, profile['measurement_seconds'], 'confirm')
     state = decision(measured, profile)
