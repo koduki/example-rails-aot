@@ -8,6 +8,7 @@ on:
       - "tests/bench/**"
       - "blog/**"
       - "infra/terraform/**"
+      - ".agents/skills/**"
       - ".github/workflows/benchmark.yml"
   pull_request:
     paths:
@@ -17,14 +18,23 @@ on:
       - 'scripts/bench/**'
       - 'tests/bench/**'
       - 'infra/terraform/**'
+      - '.agents/skills/**'
       - '.dockerignore'
       - 'scripts/aot/transpile.sh'
       - 'scripts/aot/prepare-assets.sh'
       - '.github/workflows/benchmark.yml'
   workflow_dispatch:
     inputs:
+      mode:
+        description: 'quick: unit, profile and Terraform checks; full: image builds, nine-target correctness and hosted smoke'
+        required: true
+        default: quick
+        type: choice
+        options:
+          - quick
+          - full
       profile:
-        description: 'Hosted-runner profile (including long JRuby convergence pilot); run full on a dedicated host'
+        description: 'For manual full mode only; GCE capacity runs separately on two VMs'
         required: true
         default: 'quick'
         type: choice
@@ -60,6 +70,7 @@ jobs:
     timeout-minutes: 240
     env:
       BENCH_CI: '1'
+      BENCH_CI_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'quick' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -117,24 +128,28 @@ jobs:
           echo "seed=$SEED_VAL" >> "$GITHUB_OUTPUT"
 
       - name: Build all runtime images
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: |
           python3 scripts/bench/run.py build \
             --targets rails-cruby-off,rails-cruby-yjit,emit-cruby-off,emit-cruby-yjit,rails-jruby,emit-jruby,spinel,rails-jruby-off,emit-jruby-off \
             --output bench-results/build
 
       - name: Compare serving runtime, responses and database operations
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: |
           python3 scripts/bench/run.py preflight \
             --targets rails-cruby-off,rails-cruby-yjit,emit-cruby-off,emit-cruby-yjit,rails-jruby,emit-jruby,spinel,rails-jruby-off,emit-jruby-off \
             --output bench-results/preflight
 
       - name: Verify 1000-article 20-result pagination on all nine targets
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: |
           python3 scripts/bench/run.py preflight \
             --profile bench/profiles/ci-pagination.yml \
             --output bench-results/pagination-preflight
 
       - name: Execute sequential benchmark trials (same measurement job)
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: |
           ARGS="--profile ${{ steps.config.outputs.profile_path }}"
           if [ -n "${{ steps.config.outputs.targets }}" ]; then
@@ -147,16 +162,16 @@ jobs:
             --preflight-file bench-results/preflight/preflight.json \
             --output bench-results/measurement
 
-      - name: Verify valid read/update CRUD workload on PR
-        if: github.event_name == 'pull_request'
+      - name: Verify valid read/update CRUD workload
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: |
           python3 scripts/bench/run.py run \
             --profile bench/profiles/crud.yml \
             --preflight-file bench-results/preflight/preflight.json \
             --output bench-results/crud
 
-      - name: Verify valid create/delete workload on PR
-        if: github.event_name == 'pull_request'
+      - name: Verify valid create/delete workload
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: |
           python3 scripts/bench/run.py run \
             --profile bench/profiles/crud-create-delete.yml \

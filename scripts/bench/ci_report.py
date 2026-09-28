@@ -14,6 +14,7 @@ def read(path):
 
 
 def generate():
+    mode = os.environ.get('BENCH_CI_MODE', 'full')
     builds = read(ROOT / 'bench-results/build/images.json')
     checks = read(ROOT / 'bench-results/preflight/preflight.json')
     pagination = read(ROOT / 'bench-results/pagination-preflight/preflight.json')
@@ -22,7 +23,18 @@ def generate():
     tf = read(ROOT / 'bench-results/terraform-status.json')
     commit = os.environ.get('GITHUB_SHA') or subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     lines = ['# CI Verification Report', '', f'- Commit: `{commit}`',
-             '- CI smoke is a regression signal, not a capacity benchmark.', '',
+             f'- Mode: `{mode}`.',
+             '- Hosted Actions checks are not a GCE capacity benchmark.', '']
+    if mode == 'quick':
+        lines += ['## Quick gate', '',
+                  f'- Harness unit tests: `{tests.get("status", "unknown")}`.',
+                  f'- Terraform fmt/init/validate: `{tf.get("status", "unknown")}`.',
+                  '- All benchmark image builds, runtime preflight, 1000-article pagination, CRUD and trial execution: not run in quick mode.',
+                  '- Run the Benchmark Pipeline manually with mode `full` for those checks; run GCE c3 capacity separately on the two VMs.', '']
+        DEST.parent.mkdir(exist_ok=True, parents=True)
+        DEST.write_text('\n'.join(lines))
+        return DEST
+    lines += [
              '## Build, runtime and endpoint gate', '',
              '| Target | Build | Runtime/JIT probe | Page eligible |', '| --- | --- | --- | --- |']
     stages = {b.get('stage') for b in builds} if isinstance(builds, list) else set()
@@ -38,7 +50,7 @@ def generate():
               f'- Terraform fmt/init/validate: `{tf.get("status", "unknown")}`.', '',
               '## Known exclusions', '',
               '- Hosted runner observations are excluded from GCE capacity, runtime winner and speedup claims.',
-              '- JRuby long convergence is a manual diagnostic workflow.',
+              '- JRuby long convergence uses a manual full-mode diagnostic profile.',
               '- GCE execution requires separately provisioned private app/tester VMs and a real run.', '']
     DEST.parent.mkdir(exist_ok=True, parents=True)
     DEST.write_text('\n'.join(lines))
