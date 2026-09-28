@@ -1,15 +1,25 @@
 name: Rails to Spinel AOT Pipeline
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'quick: Rails baseline; full: pinned AOT build, differential, container and Ruby-less checks'
+        required: true
+        default: quick
+        type: choice
+        options:
+          - quick
+          - full
 permissions:
   contents: read
 defaults:
   run:
     shell: bash
 concurrency:
-  group: aot-${{ github.head_ref || github.ref_name }}
+  group: aot-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'quick' }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
   build-and-test:
@@ -28,9 +38,11 @@ jobs:
           bundler-cache: true
           working-directory: blog
       - uses: actions/setup-node@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         with:
           node-version: '22.14.0'
       - name: Install native build dependencies
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends clang make libsqlite3-dev libjemalloc-dev libssl-dev zlib1g-dev sqlite3 pkg-config
@@ -39,44 +51,53 @@ jobs:
           mkdir -p reports
           bash scripts/aot/test-rails.sh 2>&1 | tee reports/rails-tests.log
       - name: Archive Rails source
-        if: always()
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: python3 scripts/aot/archive-source.py
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         with:
           name: rails-source-${{ github.sha }}
           path: artifacts/rails-source.tar.gz
           if-no-files-found: error
       - uses: actions/cache@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         with:
           path: .toolchain
           key: native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('config/aot-toolchain.env', 'scripts/aot/install-toolchain.sh') }}
       - name: Install pinned Roundhouse and Spinel
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: bash scripts/aot/install-toolchain.sh 2>&1 | tee reports/toolchain.log
       - name: Strict transpile and native build
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: bash scripts/aot/build.sh
       - name: HTTP and restart persistence smoke test
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: bash scripts/aot/smoke-native.sh
       - name: Differential comparison (Rails vs Spinel AOT)
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: bash scripts/aot/run-comparison.sh
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         with:
           name: diagnostics-${{ github.sha }}
           path: reports/
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         with:
           name: native-runtime-${{ github.sha }}
           path: artifacts/blog-linux-x86_64.tar.gz
       - name: Archive emitted source
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: tar -czf artifacts/spinel-source.tar.gz --exclude=build -C out/spinel .
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         with:
           name: spinel-source-${{ github.sha }}
           path: artifacts/spinel-source.tar.gz
 
   container-verification:
     needs: build-and-test
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -95,6 +116,7 @@ jobs:
 
   runtime-without-ruby:
     needs: build-and-test
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
     runs-on: ubuntu-24.04
     container: ubuntu:24.04
     timeout-minutes: 10

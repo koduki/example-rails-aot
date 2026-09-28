@@ -18,6 +18,8 @@ import uuid
 from pathlib import Path
 
 from prepare import prepare
+from loadgen import RemoteLoadGenerator
+import capacity
 from preflight import HttpClient, READS, capture, check_probe, compare, snapshot
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -88,7 +90,13 @@ def config(path):
     if 'verification_only' in p and (type(p['verification_only']) is not bool or
             p['verification_only'] and p.get('k6_script') != 'bench/k6/crud.js'):
         raise ValueError('verification_only requires a CRUD k6 profile and a boolean setting')
-    minimum = len(p['targets']) * len(p['endpoints']) * p['repetitions'] * (
+    if p.get('capacity_search'):
+        if p['driver'] != 'k6' or len(p['endpoints']) != 1 or p['repetitions'] < 5:
+            raise ValueError('Capacity profile requires k6, one endpoint, and >=5 repetitions')
+        for key in ('capacity_start_rps', 'capacity_max_rps', 'capacity_step_seconds', 'capacity_tolerance_rps', 'slo_p99_ms'):
+            if p.get(key, 0) <= 0:
+                raise ValueError('Invalid capacity setting: ' + key)
+    minimum = len(p['targets'] ) * len(p['endpoints']) * p['repetitions'] * (
         p['warmup_min_seconds'] + p['measurement_seconds'])
     if p['total_timeout'] < minimum:
         raise ValueError(f'total_timeout {p["total_timeout"]}s cannot fit the minimum {minimum}s of trials')
@@ -113,11 +121,11 @@ def schedule(p):
             result.extend({'target': t, 'endpoint': endpoint, 'repetition': repetition + 1} for t in order)
     return result
 
-def allocation(p, app_cpus=None, load_cpus=None):
+def allocation(p, app_cpus=None, load_cpus=None, remote=False, dry_run=False):
     allowed = sorted(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else list(range(os.cpu_count() or 1))
     app = list(map(int, app_cpus.split(','))) if app_cpus else allowed[:p['cpu_count']]
-    client = list(map(int, load_cpus.split(','))) if load_cpus else [c for c in allowed if c not in app]
-    if len(set(app)) != p['cpu_count'] or not client or set(app) & set(client) or (set(app)|set(client))-set(allowed):
+    client = (list(map(int, load_cpus.split(','))) if load_cpus else allowed[:p['cpu_count']]) if remote else (list(map(int, load_cpus.split(','))) if load_cpus else [c for c in allowed if c not in app])
+    if len(set(app)) != p['cpu_count'] or not client or (not remote and set(app) & set(client)) or (not dry_run and set(app)-set(allowed)) or (not remote and set(client)-set(allowed)):
         raise ValueError('Need distinct allowed CPUs for the application and load generator')
     return {'app': app, 'client': client, 'allowed': allowed}
 
@@ -139,8 +147,10 @@ def stable(windows, p):
            r['errors'] / max(1, r.get('requests_total', r.get('successful', 0) + r['errors'])) >
            p.get('warmup_max_error_rate', 0) for r in rows):
         return False
-    for key in ('rps', 'p95_ms'):
-        values = [r[key] for r in rows]
+    for key in (('rps', 'p95_ms', 'p99_ms') if p.get('capacity_search') else ('rps', 'p95_ms')):
+        values = [r.get(key) or r.get('latency_ms', {}).get(key.removesuffix('_ms').replace('p99', 'p99')) for r in rows]
+        if any(v is None or v <= 0 for v in values):
+            return False
         avg = statistics.mean(values)
         half = n // 2
         drift = abs(statistics.mean(values[-half:])-statistics.mean(values[:half])) / avg
@@ -206,6 +216,22 @@ def warmup_valid(windows):
 def tag(target):
     return 'rails-aot-bench:' + TARGETS['targets'][target]['image']
 
+def throttled_count(cpu_stat):
+    if not isinstance(cpu_stat, str):
+        return None
+    for line in cpu_stat.splitlines():
+        if line.startswith('nr_throttled '):
+            return int(line.split()[1])
+    return None
+
+
+def docker_port_mapping(profile):
+    """Bind a fixed private-reachable port only in two-VM mode."""
+    host = '0.0.0.0' if profile.get('remote_loadgen') else '127.0.0.1'
+    port = str(profile.get('target_port', 3000)) if profile.get('remote_loadgen') else ''
+    return f'{host}:{port}:3000'
+
+
 class Server:
     def __init__(self, target, directory, profile, cpus):
         self.target, self.directory, self.profile, self.cpus = target, Path(directory), profile, cpus
@@ -217,10 +243,9 @@ class Server:
         self.fixture = prepare(self.database, count=self.profile.get('fixture_articles', 3))
         t = TARGETS['targets'][self.target]
         target_host = self.profile.get('target_host', '127.0.0.1')
-        bind_host = '0.0.0.0' if target_host not in ('127.0.0.1', 'localhost') else '127.0.0.1'
         args = ['docker', 'run', '-d', '--name', self.name, '--cpuset-cpus', ','.join(map(str,self.cpus['app'])),
                 '--memory', str(self.profile['memory_mb'])+'m', '--memory-swap', str(self.profile['memory_mb'])+'m',
-                '-p', f'{bind_host}::3000', '--mount', 'type=bind,src='+str(self.database.parent.resolve())+',dst=/data',
+                '-p', docker_port_mapping(self.profile), '--mount', 'type=bind,src='+str(self.database.parent.resolve())+',dst=/data',
                 '-e', 'BENCH_JIT='+t['jit'], '-e', 'RAILS_MAX_THREADS='+str(self.profile['threads']),
                 '-e', 'BENCH_PUMA_WORKERS='+str(self.profile['cpu_count'] if t['runtime'] == 'cruby' and self.profile['cpu_count'] > 1 else 0),
                 '-e', 'SPINEL_WORKERS='+str(self.profile['spinel_workers'])]
@@ -323,8 +348,14 @@ def report(output):
             for row in rows if row['status'] not in ('passed', 'verified')]
     save(root/'report.json',data)
 
-    import report as p1_report
-    p1_report.build_report(root)
+    plan_path = root / 'plan.json'
+    profile = json.loads(plan_path.read_text())['profile'] if plan_path.exists() else {}
+    if profile.get('capacity_search'):
+        import gce_report
+        gce_report.generate(root)
+    elif not os.environ.get('BENCH_CI') and not (profile.get('allow_unstable') and profile.get('repetitions') == 1):
+        import report as p1_report
+        p1_report.build_report(root)
     return data
 
 def build(names, output):
@@ -416,23 +447,34 @@ def reuse_preflight(path, names):
         raise ValueError('Preflight results do not cover requested targets; rerun preflight')
     return checks
 
-def sample(server, endpoint, duration, p, cpus, directory=None):
+def sample(server, endpoint, duration, p, cpus, directory=None, rate=None, phase=None):
     if p.get('driver') == 'k6':
         output_dir = Path(directory) if directory else ROOT / 'bench-results/tmp'
         output_dir.mkdir(parents=True, exist_ok=True)
         summary_path = output_dir / 'k6-summary.json'
         summary_path.unlink(missing_ok=True)
-        rate = p.get('offered_rps', 50)
+        rate = rate if rate is not None else p.get('offered_rps', 50)
         client_cpus = ','.join(map(str, cpus['client']))
         script_rel = p.get('k6_script', 'bench/k6/read.js')
         is_crud = script_rel == 'bench/k6/crud.js'
         target_url = server.url if is_crud else server.url + endpoint
         env_args = ['-e', f'TARGET_URL={target_url}', '-e', f'DURATION={int(duration)}s',
                     '-e', f'RATE={rate}', '-e', f'TIMEOUT={int(p["request_timeout"])}s']
+        if p.get('capacity_search'):
+            env_args += ['-e', 'PRE_ALLOCATED_VUS=512', '-e', 'MAX_VUS=4096']
+        if phase == 'warmup' and p.get('warmup_closed_loop'):
+            env_args += ['-e', 'MODE=closed', '-e', f'WARMUP_VUS={p.get("connections", 32)}']
         if is_crud:
             env_args += ['-e', f'NUM_ARTICLES={p.get("fixture_articles", 3)}',
                          '-e', f'SCENARIO={p.get("crud_scenario", "mix")}']
 
+        if p.get('remote_loadgen'):
+            env_map = dict(v.split('=', 1) for i, v in enumerate(env_args) if i > 0 and env_args[i-1] == '-e')
+            RemoteLoadGenerator(p['remote_loadgen'], p['gce_zone'], p['gce_project']).run(
+                ROOT / script_rel, env_map, output_dir, duration + p['request_timeout'] + 30)
+            measured = json.loads(summary_path.read_text())
+            # Keep a normalized source file alongside the raw tester artifacts.
+            return validate_k6(measured, summary_path, is_crud)
         has_local_k6 = False
         try:
             has_local_k6 = subprocess.run(['k6', 'version'], capture_output=True, timeout=2).returncode == 0
@@ -466,23 +508,26 @@ def sample(server, endpoint, duration, p, cpus, directory=None):
             detail = log_path.read_text(encoding='utf-8')[-1200:] if log_path.exists() else 'no k6 log'
             raise RuntimeError(f'k6 produced no normalized summary: {summary_path}\n{detail}')
         measured = json.loads(summary_path.read_text(encoding='utf-8'))
-        required = ('elapsed', 'rps', 'p95_ms', 'requests_total', 'requests_successful',
-                    'requests_failed', 'iterations_dropped', 'client_saturated')
-        if measured.get('driver') not in ('k6-open-arrival', 'k6-crud') or any(k not in measured for k in required):
-            raise ValueError(f'Invalid k6 summary schema: {summary_path}')
-        if measured['elapsed'] <= 0 or (measured['requests_successful'] > 0 and (
-                measured['p95_ms'] <= 0 or measured.get('latency_ms', {}).get('p99', 0) <= 0)):
-            raise ValueError(f'Incomplete k6 duration or latency metrics: {summary_path}')
-        if is_crud and (measured.get('driver') != 'k6-crud' or
-                measured.get('operations', {}).get('ops_successful_rate') is None or
-                measured.get('operation_latency_ms', {}).get('p99', 0) <= 0):
-            raise ValueError(f'Incomplete CRUD operation rate or latency metrics: {summary_path}')
-        return measured
+        return validate_k6(measured, summary_path, is_crud)
 
     args = [sys.executable, str(ROOT / 'scripts/bench/driver.py'), server.url + endpoint,
             '--duration', str(duration), '--connections', str(p['connections']),
             '--timeout', str(p['request_timeout']), '--cpus', ','.join(map(str, cpus['client']))]
     return json.loads(command(args, timeout=duration + p['request_timeout'] + 15))
+
+def validate_k6(measured, summary_path, is_crud):
+    required = ('elapsed', 'rps', 'p95_ms', 'requests_total', 'requests_successful',
+                'requests_failed', 'iterations_dropped', 'client_saturated')
+    if measured.get('driver') not in ('k6-open-arrival', 'k6-crud') or any(k not in measured for k in required):
+        raise ValueError(f'Invalid k6 summary schema: {summary_path}')
+    if measured['elapsed'] <= 0 or (measured['requests_successful'] > 0 and (
+            measured['p95_ms'] <= 0 or measured.get('latency_ms', {}).get('p99', 0) <= 0)):
+        raise ValueError(f'Incomplete k6 duration or latency metrics: {summary_path}')
+    if is_crud and (measured.get('driver') != 'k6-crud' or
+            measured.get('operations', {}).get('ops_successful_rate') is None or
+            measured.get('operation_latency_ms', {}).get('p99', 0) <= 0):
+        raise ValueError(f'Incomplete CRUD operation rate or latency metrics: {summary_path}')
+    return measured
 
 def trials(p, cpus, output, checks):
     result = []
@@ -502,7 +547,8 @@ def trials(p, cpus, output, checks):
                     windows = []; elapsed = 0.0; ready = False
                     verification_only = p.get('verification_only', False)
                     while elapsed < p['warmup_max_seconds'] and time.monotonic() < deadline:
-                        window = sample(server, trial['endpoint'], p['window_seconds'], p, cpus, directory)
+                        save(directory / 'progress.json', {'target': trial['target'], 'repetition': trial['repetition'], 'phase': 'warmup', 'window': len(windows) + 1})
+                        window = sample(server, trial['endpoint'], p['window_seconds'], p, cpus, directory / f'warmup-{len(windows):03d}' if p.get('capacity_search') else directory, phase='warmup')
                         windows.append(window); elapsed += window['elapsed']
                         save(directory / 'warmup.json', windows)
                         # Functional smoke may see a startup timeout before the
@@ -534,12 +580,45 @@ def trials(p, cpus, output, checks):
                         telemetry = {'status': 'unavailable', 'reason': 'Collector could not be started'}
                         try:
                             import collect
-                            collector = collect.ResourceCollector(server.name, interval=1.0)
-                            collector.start()
+                            if not p.get('capacity_search'):
+                                collector = collect.ResourceCollector(server.name, interval=1.0)
+                                collector.start()
                         except Exception as e:
+                            if p.get('capacity_search'):
+                                raise RuntimeError('App telemetry collector unavailable: ' + str(e)) from e
                             telemetry = {'status': 'unavailable', 'reason': str(e)}
                         try:
-                            measured = sample(server, trial['endpoint'], p['measurement_seconds'], p, cpus, directory)
+                            if p.get('capacity_search'):
+                                def measure(rate, duration, phase):
+                                    nonlocal telemetry
+                                    step_dir = directory / f'{len(steps_seen):03d}-{phase}-{rate}'
+                                    steps_seen.append(str(step_dir))
+                                    save(directory / 'progress.json', {'target': trial['target'], 'repetition': trial['repetition'], 'phase': phase, 'rate': rate, 'step': len(steps_seen)})
+                                    step_collector = collect.ResourceCollector(server.name, interval=1.0)
+                                    before_cpu = server.record_cpu(f'{len(steps_seen):03d}-cpu-before.json')
+                                    step_collector.start()
+                                    try:
+                                        measured_step = sample(server, trial['endpoint'], duration, p, cpus, step_dir, rate=rate, phase=phase)
+                                    finally:
+                                        step_telemetry = step_collector.stop()
+                                        after_cpu = server.record_cpu(f'{len(steps_seen):03d}-cpu-after.json')
+                                        a = throttled_count(after_cpu.get('cpu.stat'))
+                                        b = throttled_count(before_cpu.get('cpu.stat'))
+                                        step_telemetry['summary']['throttled_periods_delta'] = a - b if a is not None and b is not None else None
+                                        save(step_dir / 'app-telemetry.json', step_telemetry)
+                                        if phase == 'confirm':
+                                            telemetry = step_telemetry
+                                    save(directory / 'last-step.json', {'phase': phase, 'rate': rate, 'measurement': measured_step})
+                                    return measured_step
+                                steps_seen = []
+                                result = capacity.search(measure, p)
+                                save(directory / 'capacity-search.json', result)
+                                row['capacity_rps'] = result['capacity_rps']
+                                row['offered_rps'] = result['offered_rps']
+                                row['capacity_steps'] = steps_seen
+                                measured = result['measurement']
+                            else:
+                                measured = sample(server, trial['endpoint'], p['measurement_seconds'], p, cpus, directory)
                         finally:
                             if collector:
                                 telemetry = collector.stop()
@@ -569,6 +648,11 @@ def trials(p, cpus, output, checks):
                                 has_errors = has_errors or operations.get('writes', 0) == 0
                             if scenario == 'mix':
                                 has_errors = has_errors or operations.get('reads', 0) == 0
+                        if p.get('capacity_search'):
+                            has_errors = (has_errors or result['status'] != 'pass' or
+                                telemetry.get('summary', {}).get('sample_count', 0) == 0 or
+                                (telemetry.get('summary', {}).get('throttled_periods_delta') or 0) > 0 or
+                                telemetry.get('summary', {}).get('oom_killed', False))
                         final_status = 'failed' if has_errors else (
                             'verified' if verification_only else ('unstable' if not ready else 'passed'))
                         row['status'] = final_status
@@ -604,6 +688,10 @@ def main():
     parser.add_argument('--app-cpus', help='Comma-separated CPU IDs dedicated to application container')
     parser.add_argument('--load-cpus', help='Comma-separated CPU IDs dedicated to load generator')
     parser.add_argument('--memory-mb', type=int, help='Override memory limit in MB for target containers')
+    parser.add_argument('--remote-loadgen', help='GCE tester VM name; run controller on app VM')
+    parser.add_argument('--gce-zone')
+    parser.add_argument('--gce-project')
+    parser.add_argument('--target-port', type=int)
     parser.add_argument('--target-host', help='Hostname or IP for load generator connection (default: 127.0.0.1)')
     parser.add_argument('--env-file', help='Path to environment configuration file (e.g. bench/environments/local-single-host.env)')
     parser.add_argument('--dry-run',action='store_true', help='Validate configuration and print execution plan without running')
@@ -618,6 +706,10 @@ def main():
     env_app_cpus = loaded.get('BENCH_APP_CPUS') or os.environ.get('BENCH_APP_CPUS')
     env_load_cpus = loaded.get('BENCH_LOAD_CPUS') or os.environ.get('BENCH_LOAD_CPUS')
     env_target_host = loaded.get('BENCH_TARGET_HOST') or os.environ.get('BENCH_TARGET_HOST')
+    remote = args.remote_loadgen or loaded.get('BENCH_REMOTE_LOADGEN') or os.environ.get('BENCH_REMOTE_LOADGEN')
+    zone = args.gce_zone or loaded.get('BENCH_GCE_ZONE') or os.environ.get('BENCH_GCE_ZONE')
+    project = args.gce_project or loaded.get('BENCH_GCE_PROJECT') or os.environ.get('BENCH_GCE_PROJECT')
+    port = args.target_port or loaded.get('BENCH_TARGET_PORT') or os.environ.get('BENCH_TARGET_PORT')
     env_memory_mb = loaded.get('BENCH_MEMORY_MB') or os.environ.get('BENCH_MEMORY_MB')
     env_seed = loaded.get('BENCH_SEED') or os.environ.get('BENCH_SEED')
 
@@ -646,20 +738,27 @@ def main():
     th_val = args.target_host or env_target_host
     if th_val:
         p['target_host'] = th_val
+    if remote:
+        if not zone or not project or not th_val or th_val in ('127.0.0.1', 'localhost', 'APP_PRIVATE_IP') or project == 'PROJECT_ID':
+            if not args.dry_run:
+                raise ValueError('Remote mode needs real app private IP, zone and project')
+        p.update(remote_loadgen=remote, gce_zone=zone, gce_project=project, target_port=int(port or 3000))
+    elif th_val and th_val not in ('127.0.0.1', 'localhost') and not args.dry_run:
+        raise ValueError('Nonlocal target_host requires --remote-loadgen')
     seed_val = args.seed if args.seed is not None else (int(env_seed) if env_seed is not None else None)
     if seed_val is not None:
         p['seed'] = seed_val
 
     app_cpus = args.app_cpus or env_app_cpus
     load_cpus = args.load_cpus or env_load_cpus
-    cpus = allocation(p, app_cpus, load_cpus)
+    cpus = allocation(p, app_cpus, load_cpus, remote=bool(remote), dry_run=args.dry_run)
     plan = {'profile':p,'cpus':cpus,'schedule':schedule(p),'action':args.action,
             'reference':TARGETS['reference'],'targets':TARGETS}
     if args.dry_run:
         print(json.dumps(plan,indent=2)); return 0
     output = Path(output_path).resolve(); output.mkdir(parents=True,exist_ok=False)
     save(output/'plan.json',plan)
-    save(output/'env.json', {'schema_version':1,'platform':platform.platform(),'python':sys.version,
+    environment = {'schema_version':1,'platform':platform.platform(),'python':sys.version,
          'cpuinfo':Path('/proc/cpuinfo').read_text() if Path('/proc/cpuinfo').exists() else '',
          'cpus':cpus,
          'git_commit':command(['git','rev-parse','HEAD']), 'git_status':command(['git','status','--porcelain']),
@@ -667,7 +766,14 @@ def main():
          'target_sha256':hashlib.sha256((ROOT/'bench/targets.yml').read_bytes()).hexdigest(),
          'docker_version':command(['docker','version','--format','{{json .}}'], check=False) if shutil.which('docker') else None,
          'cpu_smt_siblings':{str(c):Path(f'/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list').read_text().strip()
-             for c in cpus['app']+cpus['client'] if Path(f'/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list').exists()}})
+             for c in cpus['app']+cpus['client'] if Path(f'/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list').exists()}}
+    if remote:
+        environment['tester_environment'] = RemoteLoadGenerator(remote, zone, project).probe()
+        environment['private_rtt'] = command(['ping', '-c', '5', th_val], timeout=15, check=False) if shutil.which('ping') else 'ping unavailable'
+        environment['app_environment'] = command(['uname', '-a'])
+    environment['image_ids'] = {stage: command(['docker', 'image', 'inspect', '--format', '{{.Id}}', 'rails-aot-bench:' + stage], check=False)
+        for stage in sorted({TARGETS['targets'][t]['image'] for t in p['targets']})} if shutil.which('docker') else {}
+    save(output/'env.json', environment)
     def interrupt(*_):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM,interrupt)

@@ -18,16 +18,16 @@ start() {
   SERVER_PID=$!
   for _ in $(seq 1 60); do
     kill -0 "$SERVER_PID" || { cat "$ROOT/reports/native-server.log"; return 1; }
-    if curl --fail --silent http://127.0.0.1:38000/articles > /dev/null; then return 0; fi
+    if curl --fail --silent --connect-timeout 2 --max-time 3 http://127.0.0.1:38000/articles > /dev/null; then return 0; fi
     sleep 1
   done
   cat "$ROOT/reports/native-server.log"
   return 1
 }
 start
-python3 scripts/aot/smoke.py http://127.0.0.1:38000 "$RUN_DIR/storage/development.sqlite3" create | tee reports/native-create.json
+timeout 120s python3 scripts/aot/smoke.py http://127.0.0.1:38000 "$RUN_DIR/storage/development.sqlite3" create | tee reports/native-create.json
 kill "$SERVER_PID"
 wait "$SERVER_PID" || true
 SERVER_PID=''
 start
-python3 scripts/aot/smoke.py http://127.0.0.1:38000 "$RUN_DIR/storage/development.sqlite3" restart | tee reports/native-restart.json
+timeout 120s python3 scripts/aot/smoke.py http://127.0.0.1:38000 "$RUN_DIR/storage/development.sqlite3" restart | tee reports/native-restart.json

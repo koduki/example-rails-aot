@@ -15,7 +15,7 @@ spec = importlib.util.spec_from_file_location('legacy_comparison', ROOT / 'scrip
 legacy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(legacy)
 HttpClient = legacy.HttpClient
-READS = ['/articles', '/articles/1', '/articles/new', '/articles.json', '/articles/1.json']
+READS = ['/articles', '/articles?page=1', '/articles/1', '/articles/new', '/articles.json', '/articles/1.json']
 PRAGMAS = {'journal_mode': 'wal', 'synchronous': '1', 'foreign_keys': '1',
            'busy_timeout': '5000', 'cache_size': '-65536', 'mmap_size': '268435456'}
 
@@ -147,6 +147,13 @@ def capture(base_url, database, target):
             if response['status'] != 200:
                 raise ValueError(f'Unexpected HTTP {response["status"]}')
             item['canonical'] = canonical(response, path.endswith('.json'))
+            if path == '/articles?page=1' and len(initial['articles']) >= 20:
+                # The HTML index renders exactly one article partial per row.
+                titles = re.findall(r'<a\b[^>]*>(Article \d+)</a>', response['body'])
+                expected = [row['title'] for row in sorted(initial['articles'],
+                    key=lambda row: (row['created_at'], row['id']), reverse=True)[:20]]
+                if titles != expected:
+                    raise ValueError(f'Page content/order mismatch: expected {expected}, observed {titles}')
             item['status'] = 'passed'
         except (ValueError, TypeError) as e:
             item.update(status='failed', reason=str(e))

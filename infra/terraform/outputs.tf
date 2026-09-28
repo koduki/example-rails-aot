@@ -1,29 +1,27 @@
-output "instance_name" {
-  description = "Name of the created benchmark runner VM."
-  value       = google_compute_instance.bench_runner.name
+output "app_instance_name" {
+  value = google_compute_instance.bench["app"].name
 }
-
-output "instance_id" {
-  description = "GCE instance ID."
-  value       = google_compute_instance.bench_runner.instance_id
+output "app_internal_ip" {
+  value = google_compute_instance.bench["app"].network_interface[0].network_ip
 }
-
-output "internal_ip" {
-  description = "Internal private IP address of the benchmark runner VM."
-  value       = google_compute_instance.bench_runner.network_interface[0].network_ip
+output "loadgen_instance_name" {
+  value = google_compute_instance.bench["loadgen"].name
 }
-
+output "loadgen_internal_ip" {
+  value = google_compute_instance.bench["loadgen"].network_interface[0].network_ip
+}
+output "zone" {
+  value = var.zone
+}
+output "app_ssh_command" {
+  value = "gcloud compute ssh ${google_compute_instance.bench["app"].name} --zone=${var.zone} --tunnel-through-iap --project=${var.project_id}"
+}
+output "loadgen_ssh_command" {
+  value = "gcloud compute ssh ${google_compute_instance.bench["loadgen"].name} --zone=${var.zone} --tunnel-through-iap --project=${var.project_id}"
+}
 output "actions_service_account_email" {
-  description = "Email of the service account used by GitHub Actions."
-  value       = google_service_account.bench_actions.email
+  value = google_service_account.bench_actions.email
 }
-
 output "runner_service_account_email" {
-  description = "Email of the service account attached to the benchmark runner VM."
-  value       = google_service_account.bench_runner.email
-}
-
-output "iap_ssh_command" {
-  description = "Command to connect to the runner VM via IAP SSH."
-  value       = "gcloud compute ssh ${google_compute_instance.bench_runner.name} --zone=${var.zone} --tunnel-through-iap --project=${var.project_id}"
+  value = google_service_account.bench_runner.email
 }

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "description": "Nine-target 1000-article / 20-result correctness preflight; no performance claim",
+  "targets": ["rails-cruby-off", "rails-cruby-yjit", "rails-jruby-off", "rails-jruby", "emit-cruby-off", "emit-cruby-yjit", "emit-jruby-off", "emit-jruby", "spinel"],
+  "endpoints": ["/articles?page=1"],
+  "fixture_articles": 1000,
+  "cpu_count": 1, "memory_mb": 3072, "threads": 3, "spinel_workers": 1,
+  "repetitions": 1, "seed": 20260928,
+  "warmup_min_seconds": 10, "warmup_max_seconds": 45,
+  "window_seconds": 5, "stable_windows": 3, "max_cv": 0.25, "max_drift": 0.25,
+  "measurement_seconds": 10, "connections": 4, "request_timeout": 5,
+  "ready_timeout": 180, "total_timeout": 1800,
+  "allow_unstable": true
+}

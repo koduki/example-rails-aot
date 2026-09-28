@@ -11,7 +11,9 @@ const preAllocatedVUs = Number(__ENV.PRE_ALLOCATED_VUS || 10);
 const maxVUs = Number(__ENV.MAX_VUS || 50);
 
 export const options = {
-  scenarios: {
+  scenarios: __ENV.MODE === 'closed' ? {
+    warmup: { executor: 'constant-vus', vus: Number(__ENV.WARMUP_VUS || 32), duration: duration },
+  } : {
     open_arrival_reads: {
       executor: 'constant-arrival-rate',
       rate: rate,

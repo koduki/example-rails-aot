@@ -41,7 +41,7 @@
 ### 2.1 プロファイル一覧
 | プロファイル | 用途 | 反復 | 対象 endpoint | ウォームアップ (min/max) | 測定時間 | 想定総時間 |
 | --- | --- | --- | --- | --- | --- | --- |
-| **`smoke.yml`** | PR CI パイプライン検証 | 1 | `/articles` (1 系統) | 10s / 45s | 10s | 約 3〜5 分 |
+| **`smoke.yml`** | Actions 手動 full 機能スモーク | 1 | `/articles` (1 系統) | 10s / 45s | 10s | 約 3〜5 分 |
 | **`quick.yml`** | Actions 手動ディスパッチ比較 | 3 | `/articles`, `/articles.json` (2 系統) | 60s / 600s | 30s | 約 30〜60 分 |
 | **`diagnostic.yml`** | JIT 相互作用診断 (Issue #18) | 1 | `/articles` (1 系統) | 15s / 60s | 15s | 約 10〜15 分 |
 | **`full.yml`** | 専用ホスト向け本測定 (Issue #19) | 5 | 全 5 系統 (HTML 3, JSON 2) | 180s / 900s | 120s | 約 6〜10 時間 |
@@ -204,7 +204,7 @@ python3 scripts/bench/run.py run --profile bench/profiles/crud.yml \
   --preflight-file bench-results/preflight/preflight.json --output bench-results/crud
 ```
 
-On pull requests the benchmark workflow runs both short CRUD scenarios after
+In manual Actions `full` mode the benchmark workflow runs both short CRUD scenarios after
 the read smoke trial (2 operations/s for read/update, 1 operation/s for
 create/delete), across all nine runtime/JIT configurations. These profiles set `verification_only: true`: they run a fixed
 minimum warmup, continuing until a clean final window if startup had errors,
@@ -226,10 +226,17 @@ failed operation, while retaining the earlier failure count in the trial.
 Create/delete also checks that warmup left the fixture article count intact;
 the timed interval still requires every operation and database effect to pass.
 
-Run `Benchmark Pipeline` with `workflow_dispatch` and select
+Ordinary PR and main pushes run the quick gate only: harness unit/CLI dry-run
+checks and Terraform validation. `Rails to Spinel AOT Pipeline` runs Rails
+baseline tests only. Neither quick result certifies nine-runtime image builds,
+endpoint/CRUD behavior, or capacity. Dispatch both workflows with mode `full`
+when those longer checks are needed; keep the commit SHA and artifacts with
+the review. Formal c3 capacity is run separately on two GCE VMs, with the
+procedure in `.agents/skills/gce-benchmark-runbook/SKILL.md`.
+
+Run `Benchmark Pipeline` with `workflow_dispatch`, mode `full`, and select
 `ci-jruby-convergence` to compare the four JRuby Rails / emitted and JRuby JIT
-on / off combinations. PR Actions run the short read and functional CRUD
-checks; the long convergence pilot is opt-in. It uses one read endpoint, three rotated
+on / off combinations. The long convergence pilot is opt-in. It uses one read endpoint, three rotated
 repetitions, a 60–600 second warmup, and a strict convergence gate. An
 `unstable` trial fails this step; it cannot contribute to the pairwise report.
 The worst configured warmup plus measurement time is 126 minutes for 12 trials,

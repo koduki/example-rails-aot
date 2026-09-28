@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "Dedicated-host configuration; execution on GCE has not yet been validated",
+  "description": "Historical fixed-50-RPS pilot; not a capacity benchmark. Use gce-c3-capacity.yml for the formal two-VM experiment",
   "targets": ["rails-cruby-off", "rails-cruby-yjit", "emit-cruby-off", "emit-cruby-yjit", "rails-jruby", "emit-jruby", "spinel"],
   "endpoints": ["/articles", "/articles/1", "/articles/new", "/articles.json", "/articles/1.json"],
   "cpu_count": 1, "memory_mb": 3072, "threads": 3, "spinel_workers": 1,
