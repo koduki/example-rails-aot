@@ -501,14 +501,22 @@ def trials(p, cpus, output, checks):
                         window = sample(server, trial['endpoint'], p['window_seconds'], p, cpus, directory)
                         windows.append(window); elapsed += window['elapsed']
                         save(directory / 'warmup.json', windows)
-                        if verification_only and elapsed >= p['warmup_min_seconds']:
+                        # Functional smoke may see a startup timeout before the
+                        # JVM settles. Require a clean *last* window and retain
+                        # earlier failures in the artifact for audit.
+                        if verification_only and elapsed >= p['warmup_min_seconds'] and warmup_valid(windows[-1:]):
                             break
                         if not verification_only and elapsed >= p['warmup_min_seconds'] and stable(windows, p):
                             ready = True; break
                     row['warmup_seconds'] = elapsed
                     row['warmup_converged'] = None if verification_only else ready
+                    if verification_only:
+                        row['warmup_failed_windows'] = sum(not warmup_valid([w]) for w in windows)
                     diag_warmup = server.get_diagnostics() if p.get('diagnostics') else None
-                    if verification_only and not warmup_valid(windows):
+                    warmup_clean = warmup_valid(windows[-1:])
+                    if verification_only and p.get('crud_scenario') == 'create_delete':
+                        warmup_clean = warmup_clean and len(snapshot(server.database)['articles']) == p.get('fixture_articles', 3)
+                    if verification_only and not warmup_clean:
                         row.update(status='failed', reason='Warmup had failed requests, operations, or dropped iterations')
                     elif not ready and not verification_only and not p.get('allow_unstable'):
                         row.update(status='unstable', reason='No stable window within budget')

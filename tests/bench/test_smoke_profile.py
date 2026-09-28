@@ -15,6 +15,15 @@ from prepare import prepare
 from preflight import snapshot
 
 class SmokeProfileTests(unittest.TestCase):
+    def test_functional_warmup_recovers_only_after_a_clean_window(self):
+        failed = {'requests_failed': 1, 'iterations_dropped': 0,
+                  'operations': {'failed': 1}}
+        clean = {'requests_failed': 0, 'iterations_dropped': 0,
+                 'operations': {'failed': 0}}
+        self.assertFalse(run.warmup_valid([failed]))
+        self.assertTrue(run.warmup_valid([failed, clean][-1:]))
+        self.assertFalse(run.warmup_valid([clean, failed][-1:]))
+
     def test_crud_database_checks_detect_real_writes_and_leaks(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / 'fixture.sqlite3'

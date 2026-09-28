@@ -208,7 +208,8 @@ python3 scripts/bench/run.py run --profile bench/profiles/crud.yml \
 On pull requests the benchmark workflow runs both short CRUD scenarios after
 the read smoke trial (2 operations/s for read/update, 1 operation/s for
 create/delete), across all nine runtime/JIT configurations. These profiles set `verification_only: true`: they run a fixed
-minimum warmup and mark successful trials `verified`, without claiming that
+minimum warmup, continuing until a clean final window if startup had errors,
+and mark successful trials `verified`, without claiming that
 five-second windows with only a few requests establish latency convergence.
 The runner rejects failed operations, dropped iterations, and client saturation.
 It also checks the SQLite state after each timed trial: updates must contain
@@ -216,6 +217,15 @@ the values sent by k6, while create/delete must leave no new articles or
 comments and must advance the article sequence by the number of completed
 operations. A redirect alone does not certify persistence. CI fails if any
 target is not `verified`.
+
+The first retry run ([Actions run 36360930975](https://github.com/koduki/example-rails-aot/actions/runs/36360930975))
+hit a single 5-second DELETE timeout in the first create/delete warmup window
+on emitted JRuby with JIT off. The database contained the original 100
+articles afterward, and the other eight targets verified. Functional smoke
+now continues up to its configured warmup limit until the final window has no
+failed operation, while retaining the earlier failure count in the trial.
+Create/delete also checks that warmup left the fixture article count intact;
+the timed interval still requires every operation and database effect to pass.
 
 PR Actions also runs `ci-jruby-convergence.yml` for the four JRuby Rails / emitted
 and JRuby JIT on / off combinations. It uses one read endpoint, three rotated
