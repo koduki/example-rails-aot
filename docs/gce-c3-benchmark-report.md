@@ -25,4 +25,19 @@ Spinel includes its native HTTP runtime, DB adapter, scheduling and memory manag
 3. On app, run `python3 scripts/bench/run.py build --targets rails-cruby-off,rails-cruby-yjit,rails-jruby-off,rails-jruby,emit-cruby-off,emit-cruby-yjit,emit-jruby-off,emit-jruby,spinel --output bench-results/build`; run `python3 scripts/bench/run.py run --env-file bench/environments/gce-c3-standard-4.env --target-host APP_INTERNAL_IP --gce-project PROJECT_ID --gce-zone ZONE --output bench-results/gce-c3-capacity-RUN_ID`. Preserve all raw artifacts. A strict preflight precedes measurement.
 4. Review `gce-summary.md` and `gce-summary.json`, failed or incomplete repetitions, source SHA and environment. Do not publish performance conclusions if remote execution, pagination, tester headroom or correctness fails.
 
+## Cost cleanup and artifact retention
+
+Download the complete raw result directory to the operator machine, including `plan.json`, `env.json`, `preflight/`, `trials/`, `gce-summary.json` and `gce-summary.md`. Verify the local copy before removing any VM or disk. The report is generated on the app VM; stopping it before the copy completes may strand the only copy of failed or incomplete runs.
+
+Stop **both** app and tester VMs at the end of the workflow, including preflight/build errors, failed measurements, download failures and operator interruption. From the operator machine, run:
+
+```bash
+python3 scripts/bench/gce_cleanup.py --project PROJECT_ID --zone ZONE \
+  --status-file bench-results/RUN_ID/cleanup.json
+```
+
+The helper initiates both stops independently, waits until each reports `TERMINATED`, records their final status, and fails if either cannot be confirmed. It is idempotent for already stopped VMs. With an external end-to-end runner, invoke it as `gce_cleanup.py --project PROJECT_ID --zone ZONE --status-file LOCAL_PATH --after COMMAND ...`: it runs the **entire** workflow (including artifact download and report verification) and stops both VMs in `finally`, even when the command fails. A `--no-auto-stop` option in that external runner must never be the default for unattended formal runs. If the wrapper itself is killed or the operator machine loses power, manually check both VM states in GCE and run the stop command again. Do not treat a stop attempt alone as confirmation.
+
+Stopped VMs retain their SSD boot disks and any other provisioned resources, so their costs do not become zero. When the local artifacts and report have been checked and the environment will not be reused, run `terraform destroy` against the same state/tfvars after reviewing its plan. This Terraform module references the existing VPC/subnet and creates no Cloud NAT; destroying this module must not delete the shared network or NAT. Preserve the local raw artifacts independently of the Terraform state. Record whether the cleanup ended in verified stop, deliberate retention, or a failure needing manual action.
+
 GCE execution and actual measurements have not been run from this workspace. The generated report is the source for results once the infrastructure and GCP access are available.
