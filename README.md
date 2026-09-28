@@ -21,7 +21,7 @@ Rails アプリを [Roundhouse](https://github.com/rubys/roundhouse) で変換�
 
 [現行正本の Actions 実行 36380159185](https://github.com/koduki/example-rails-aot/actions/runs/36380159185)で Rails 8.0.5.1・CSRF無効のアプリを再ビルドしました。9構成の読み取り5経路が適格で、正常系 CRUD の read/update と create/delete は各9/9 `verified`。1回10秒の `GET /articles` smoke では CRuby の生成 Ruby／Rails が YJIT Off **7.49倍**、On **5.61倍**でした。Rails・生成 Ruby とも On の絶対 RPS は上がります。JRuby の短い smoke はウォームアップ依存が大きく、処理系間の倍率比較には使いません。[成果物](https://github.com/koduki/example-rails-aot/actions/runs/36380159185/artifacts/10953212083)と[分析](docs/roundhouse-rails-jit-aot-report.md)を参照してください。
 
-[初回速報レポート](docs/benchmark-results.md)は [Actions 実行 36289166814](https://github.com/koduki/example-rails-aot/actions/runs/36289166814) の**歴史的な予備測定**です。測定コミットは `e1dd3903de9dfcc8b87a16f222d0ebe43ca8c614`。当時の正本は Rails 8.1.3.1 で、測定用コピーは Rails 8.0.5.1 でした。現在の正本に対する再測定値ではありません。GitHub hosted runner 上で、同じ3記事・3コメントの SQLite fixture を使い、`GET /articles` を各構成1回、4接続・10秒の closed-loop 方式で測定しました。以下はその試行での観測値です。
+初回速報レポートは [Actions 実行 36289166814](https://github.com/koduki/example-rails-aot/actions/runs/36289166814) の**歴史的な予備測定**です。測定コミットは `e1dd3903de9dfcc8b87a16f222d0ebe43ca8c614`。当時の正本は Rails 8.1.3.1 で、測定用コピーは Rails 8.0.5.1 でした。現在の正本に対する再測定値ではありません。GitHub hosted runner 上で、同じ3記事・3コメントの SQLite fixture を使い、`GET /articles` を各構成1回、4接続・10秒の closed-loop 方式で測定しました。以下はその試行での観測値です。
 
 | 実行系 | ターゲット ID | JIT | Roundhouse | RPS | p50 | p95 | コンテナメモリ最大 | 判定 |
 | --- | --- | --- | :---: | ---: | ---: | ---: | ---: | --- |
