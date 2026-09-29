@@ -4,6 +4,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -82,9 +83,14 @@ class RemoteLoadGenerator:
             for filename in ('k6-summary.json', 'k6.log', 'tester-cpu.log',
                              'network-before.txt', 'network-after.txt',
                              'memory-before.txt', 'memory-after.txt'):
-                copied = invoke(remote_copy(self.instance, self.zone, self.project,
-                                            remote + '/' + filename,
-                                            str(directory / filename), inbound=True), 90)
+                copied = None
+                for attempt in range(3):
+                    copied = invoke(remote_copy(self.instance, self.zone, self.project,
+                                                remote + '/' + filename,
+                                                str(directory / filename), inbound=True), 90)
+                    if copied.returncode == 0:
+                        break
+                    time.sleep(1)
                 if copied.returncode and filename in ('k6-summary.json', 'k6.log'):
                     raise RuntimeError('Remote artifact transfer failed: ' + filename + ': ' + copied.stdout[-1000:])
             summary = directory / 'k6-summary.json'

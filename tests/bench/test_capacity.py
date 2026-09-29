@@ -137,3 +137,58 @@ class CapacityTests(unittest.TestCase):
         self.assertEqual(len(p['targets']), 9)
         self.assertEqual(p['fixture_articles'], 1000)
         self.assertEqual(len(run.schedule(p)), 45)
+
+    def test_coarse_overload_recovers_to_lower_confirmed_capacity(self):
+        # 25, 50, 100 pass; 200 saturates SUT; recover to 100 and confirm sustained capacity.
+        profile = dict(self.profile, capacity_start_rps=25, capacity_max_rps=800,
+                       capacity_tolerance_rps=25, capacity_min_rps=25)
+        def measure(rate, duration, phase):
+            # Server saturates at > 100 RPS
+            p99 = 200 if rate > 100 else 20
+            return self.result(rate, p99=p99)
+        result = capacity.search(measure, profile)
+        self.assertEqual(result['status'], 'pass')
+        self.assertEqual(result['capacity_rps'], 100)
+        phases = [s['phase'] for s in result['steps']]
+        self.assertIn('coarse', phases)
+        self.assertIn('bracket', phases)
+        self.assertEqual(phases[-1], 'confirm')
+
+    def test_tester_cpu_shortage_rejects_without_estimating_capacity(self):
+        # When tester CPU is saturated, capacity cannot be estimated; must request loadgen fix/retry.
+        def measure(rate, duration, phase):
+            return self.result(rate, tester_cpu_pct=92.5)
+        with self.assertRaisesRegex(RuntimeError, 'Tester CPU exceeded limit'):
+            capacity.search(measure, self.profile)
+
+    def test_confirmation_failure_triggers_lower_candidate_re_search(self):
+        # 100 RPS passes 30s exploration, but fails 120s confirmation; search lower candidate (50 RPS).
+        profile = dict(self.profile, capacity_start_rps=100, capacity_min_rps=25,
+                       capacity_tolerance_rps=25)
+        def measure(rate, duration, phase):
+            # Server saturates at > 100 RPS during coarse search
+            if rate > 100:
+                return self.result(rate, p99=200)
+            # 100 RPS passes 30s probe but fails 120s confirmation; 50 RPS passes both
+            if rate == 100 and phase == 'confirm':
+                return self.result(rate, p99=180)  # fails SLO on 120s confirm
+            return self.result(rate, p99=20)  # passes
+        result = capacity.search(measure, profile)
+        self.assertEqual(result['status'], 'pass')
+        self.assertEqual(result['capacity_rps'], 50)
+        confirm_rates = [s['rate'] for s in result['steps'] if s['phase'] == 'confirm']
+        self.assertEqual(confirm_rates, [100, 50])
+
+    def test_corrupted_response_detected_and_rejected(self):
+        # HTTP 200 with missing/corrupted body fails response integrity check.
+        m = self.result(100, integrity_errors=3)
+        cls_info = capacity.classify(m, self.profile)
+        self.assertEqual(cls_info['category'], 'sut_slo_fail')
+        self.assertIn('integrity', cls_info['reason'].lower())
+        self.assertEqual(capacity.decision(m, self.profile), 'slo_fail')
+
+    def test_transport_artifact_error_classification(self):
+        m = self.result(100, transport_error=True)
+        cls_info = capacity.classify(m, self.profile)
+        self.assertEqual(cls_info['category'], 'transport_or_artifact_error')
+        self.assertEqual(capacity.decision(m, self.profile), 'transport_error')
