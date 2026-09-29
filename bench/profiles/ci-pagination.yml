@@ -2,7 +2,7 @@
   "schema_version": 1,
   "description": "Nine-target 1000-article / 20-result correctness preflight; no performance claim",
   "targets": ["rails-cruby-off", "rails-cruby-yjit", "rails-jruby-off", "rails-jruby", "emit-cruby-off", "emit-cruby-yjit", "emit-jruby-off", "emit-jruby", "spinel"],
-  "endpoints": ["/articles?page=1"],
+  "endpoints": ["/articles?page=1", "/articles?page=1&pagination=db-paged"],
   "fixture_articles": 1000,
   "cpu_count": 1, "memory_mb": 3072, "threads": 3, "spinel_workers": 1,
   "repetitions": 1, "seed": 20260928,

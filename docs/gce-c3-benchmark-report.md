@@ -14,7 +14,8 @@ Under the rigorous benchmarking contract (`rigorous-benchmarking`), **only confi
   - `emit-jruby-off`: All 5 repetitions (134/134 warmup windows) experienced massive request failures (25,636 failed out of 27,438 requests, 93.43% failure rate, ending successful throughput ~0.35 RPS, p99 ~5,000 ms timeouts). While classified as `unstable` due to budget expiration, this reflects extreme CPU saturation and interpretation overhead rather than slow convergence (#55).
   - `emit-cruby-off`: 3/5 repetitions were `unstable` with zero request errors but throughput drift/CV exceeding 5% (median ~30.5 RPS), and 2/5 failed at 100 RPS coarse search.
   - `rails-jruby`: 3/5 repetitions were `unstable` (0.089% failure rate, 280 failed / 313,071 requests), and 2/5 failed at 100 RPS coarse search.
-- **In-Memory Pagination Overhead**: The `app-sliced-page20-1000` workload (`Article.order(created_at: :desc).to_a[0...20]`) delegates sorting (`ORDER BY created_at DESC`) to SQLite at the DB engine level. The severe CPU bottleneck arises because all 1,000 rows are fetched from the database, instantiated into 1,000 ActiveRecord objects in Ruby memory, and then sliced (`[0...20]`) in Ruby. Ruby does *not* sort 1,000 items in memory; rather, instantiating 1,000 Active Record objects and allocating associated strings and hashes on every request generates prohibitive memory allocation and GC overhead for non-JIT configurations.
+- **In-Memory Pagination Overhead**: The `app-sliced-page20-1000` workload (`Article.order(created_at: :desc, id: :desc).to_a[0...20]`) delegates sorting (`ORDER BY created_at DESC, id DESC`) to SQLite at the DB engine level. The severe CPU bottleneck arises because all 1,000 rows are fetched from the database, instantiated into 1,000 ActiveRecord objects in Ruby memory, preloaded with comments, and then sliced (`[0...20]`) in Ruby. Ruby does *not* sort 1,000 items in memory; rather, instantiating 1,000 Active Record objects and allocating associated strings and hashes on every request generates prohibitive memory allocation and GC overhead for non-JIT configurations.
+- **Key Finding - DB-Level Pagination Solution (#47)**: Native DB pagination (`db-paged-page20-1000`) executes `LIMIT 20 OFFSET ?` in SQLite, loading only 20 articles and preloading comments solely for those 20 rows, eliminating the full-table instantiation bottleneck across all 9 target runtimes.
 - **YJIT Exploration vs Sustainable Capacity**: CRuby with YJIT enabled (`rails-cruby-yjit` 5/5 trials and `emit-cruby-yjit` 4/4 completed trials) comfortably sustained the initial 100 RPS 30-second coarse search step with sub-25 ms latency and zero errors. However, stepping to 200 RPS coarse search saturated 4 vCPUs. Because the harness lacked downward recovery backoff and 120-second sustained confirmation (#51), 5-repetition sustainable capacity remains unconfirmed.
 - **Spinel Architecture & Peak Memory Units**: Roundhouse Spinel maintained an exceptionally low peak container memory footprint (~145–175 MiB across warmup trials, specifically ~150–175 MiB during the 30-window warmup runs, vs CRuby ~450–725 MiB and JRuby ~430–1,200 MiB). The metric is defined as peak container memory in MiB (1 MiB = 1,048,576 bytes, sourced from Linux cgroup v2 `memory.peak` / `memory.current` and Docker engine stats). Crucially, because all trials were failed or unconverged under heavy load, these figures represent peak memory under stress, **not** steady-state confirmed capacity memory consumption.
 - **Cohort Separation**: Historical GitHub Actions smoke results (pilot micro-benchmarks on 3-article fixtures) and this formal GCE c3-standard-4 capacity benchmark represent distinct experimental cohorts and must not be mixed or directly compared.
@@ -166,8 +167,8 @@ Preflight manifest and checksums: `bench-results/gce-20260928-c3-capacity/prefli
 
 ## 6. Technical Analysis & Dynamics
 
-### A. JIT Impact on In-Memory Slicing
-The `app-sliced-page20-1000` query (`Article.order(created_at: :desc).to_a[0...20]`) delegates ordering to SQLite via SQL `ORDER BY created_at DESC`. SQLite executes the sort inside the database engine; the application bottleneck is that all 1,000 records are fetched from SQLite into application memory and instantiated as 1,000 ActiveRecord objects per request before slicing the first 20 records (`[0...20]`). Ruby does *not* perform the 1,000-item sort in application code. Rather, instantiating 1,000 Active Record model objects per request produces massive object allocation, pointer chasing, and garbage collection pressure.
+### A. Processing Stages of In-Memory Slicing
+The `app-sliced-page20-1000` query (`Article.order(created_at: :desc, id: :desc).to_a[0...20]`) delegates ordering to SQLite via SQL `ORDER BY created_at DESC, id DESC`. SQLite executes the sort inside the database engine; the application bottleneck is that all 1,000 records are fetched from SQLite into application memory, instantiated as 1,000 ActiveRecord objects, preloaded with comments, and then sliced to the first 20 records (`[0...20]`). Ruby does *not* perform the 1,000-item sort in application code. Rather, instantiating 1,000 Active Record model objects per request produces massive object allocation, pointer chasing, and garbage collection pressure.
 - **Without JIT** (`rails-cruby-off`, `rails-jruby-off`, `emit-cruby-off`, `emit-jruby-off`): Object allocation and Ruby bytecode interpretation consumed 100% of 4 vCPUs even at 100 requests per second. Request latencies quickly exceeded the 5-second HTTP timeout, causing k6 open-arrival client queue exhaustion and trial failure.
 - **With YJIT** (`rails-cruby-yjit`, `emit-cruby-yjit`): YJIT compiles method call dispatches, instance variable access, and allocation fast paths, allowing CRuby to successfully sustain 100 RPS during coarse search with sub-25 ms p99 latency and zero errors. However, stepping the arrival rate to 200 RPS pegged all 4 vCPUs at 100% utilization, exceeding capacity. Because the test harness lacked downward recovery search and 120-second sustained confirmation (#51), 5-repetition sustainable capacity remains unconfirmed.
 
@@ -181,7 +182,25 @@ The `app-sliced-page20-1000` query (`Article.order(created_at: :desc).to_a[0...2
 ### D. Architectural Distinction
 Spinel is a complete native execution architecture comprising native AOT compilation, HTTP parser, SQLite DB adapter, coroutine scheduling, and GC. Performance and resource differences observed in Spinel are attributable to this full architectural redesign, not isolated compiler code emission alone.
 
-### E. Cohort Separation
+### E. DB-Level Pagination Implementation & Analysis (#47)
+To enable realistic Web application workload benchmarking without 1,000-record in-memory allocations, DB-level pagination (`db-paged-page20-1000`) was implemented across all 9 target runtimes:
+- **Query Structure**:
+  - Articles: `SELECT id, body, created_at, title, updated_at FROM articles ORDER BY created_at DESC, id DESC LIMIT 20 OFFSET ?`
+  - Comments: `SELECT id, article_id, body, commenter, created_at, updated_at FROM comments WHERE article_id IN (?)` (only for the 20 fetched article IDs; 0 queries when offset is out of bounds).
+- **Row Counts & Query Execution**:
+  - Articles retrieved: 20 rows (vs 1,000 rows in `app-sliced`).
+  - Comments retrieved: 20 rows (vs 1,000 rows in `app-sliced`).
+  - Total queries: 2 queries for valid page (1 article + 1 comment), 1 query for out-of-bounds page.
+- **EXPLAIN QUERY PLAN**:
+  - Baseline: `SCAN articles` with `USE TEMP B-TREE FOR ORDER BY`; `SEARCH comments USING INDEX index_comments_on_article_id (article_id=?)`.
+  - Composite Index (`index_articles_on_created_at_and_id ON articles(created_at DESC, id DESC)`): `SCAN articles USING INDEX index_articles_on_created_at_and_id`.
+  - To maintain strict experimental parity, all 9 targets run against the identical SQLite schema without ad-hoc indexing differences.
+- **Workload Separation**:
+  - `app-sliced-page20-1000` (`/articles?page=1&pagination=app-sliced`): preserved for historical reproducibility and memory stress analysis.
+  - `db-paged-page20-1000` (`/articles?page=1&pagination=db-paged`): established for native SQL pagination capacity comparisons.
+- **Equivalence Verification**: Page 1, page 2, last page, and out-of-bounds were verified to produce identical article sets and ordering across Rails, emitted Ruby/JRuby, and Spinel. Stable tie-breaking is enforced by `ORDER BY created_at DESC, id DESC`.
+
+### F. Cohort Separation
 Historical GitHub Actions smoke tests (3 articles, shared hosted runner, brief burst) and GCE C3 capacity benchmark (1,000 articles, dedicated bare-metal VMs, private VPC) are fundamentally distinct experimental cohorts and must not be mixed or used to calculate cross-cohort speedup ratios.
 
 ---

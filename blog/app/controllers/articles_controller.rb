@@ -7,11 +7,16 @@ class ArticlesController < ApplicationController
     page = 1 if page < 1
     first = (page - 1) * 20
     last = first + 20
-    @articles = []
-    index = 0
-    Article.includes(:comments).order(created_at: :desc, id: :desc).each do |article|
-      @articles.push(article) if index >= first && index < last
-      index += 1
+    pagination = params.fetch(:pagination, "app-sliced")
+    if pagination == "db-paged" || pagination == "db_paged" || pagination == "db"
+      @articles = Article.includes(:comments).order(created_at: :desc, id: :desc).limit(20).offset(first)
+    else
+      @articles = []
+      index = 0
+      Article.includes(:comments).order(created_at: :desc, id: :desc).each do |article|
+        @articles.push(article) if index >= first && index < last
+        index += 1
+      end
     end
   end
 

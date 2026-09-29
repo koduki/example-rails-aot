@@ -18,15 +18,56 @@ class ArticlesControllerTest < ActionDispatch::IntegrationTest
     25.times do |i|
       Article.create!(title: "Page article #{i}", body: "A sufficiently long body for validation.")
     end
-    expected = Article.order(created_at: :desc, id: :desc).limit(20).pluck(:title)
+    expected_p1 = Article.order(created_at: :desc, id: :desc).limit(20).pluck(:title)
+    expected_p2 = Article.order(created_at: :desc, id: :desc).offset(20).limit(20).pluck(:title)
+
+    # 1. Default (app-sliced) pagination
     get articles_url(page: 1)
     assert_response :success
-    assert_equal expected, css_select("#articles h2 a").map(&:text)
+    assert_equal expected_p1, css_select("#articles h2 a").map(&:text)
 
     get articles_url(page: 2)
     assert_response :success
-    assert_equal Article.order(created_at: :desc, id: :desc).offset(20).limit(20).pluck(:title),
-                 css_select("#articles h2 a").map(&:text)
+    assert_equal expected_p2, css_select("#articles h2 a").map(&:text)
+
+    # 2. DB-level pagination (db-paged)
+    get articles_url(page: 1, pagination: "db-paged")
+    assert_response :success
+    assert_equal expected_p1, css_select("#articles h2 a").map(&:text)
+
+    get articles_url(page: 2, pagination: "db-paged")
+    assert_response :success
+    assert_equal expected_p2, css_select("#articles h2 a").map(&:text)
+
+    # Out of bounds returns empty list
+    get articles_url(page: 3, pagination: "db-paged")
+    assert_response :success
+    assert_equal [], css_select("#articles h2 a").map(&:text)
+
+    # Equivalence: db-paged and app-sliced return identical article sets
+    get articles_url(page: 1, pagination: "app-sliced")
+    app_sliced_p1 = css_select("#articles h2 a").map(&:text)
+    get articles_url(page: 1, pagination: "db-paged")
+    db_paged_p1 = css_select("#articles h2 a").map(&:text)
+    assert_equal app_sliced_p1, db_paged_p1
+  end
+
+  test "index resolves tie-break by id desc when created_at is identical" do
+    same_time = Time.zone.parse("2026-01-01 12:00:00")
+    a1 = Article.create!(title: "Tie Article 1", body: "Body for article 1.", created_at: same_time)
+    a2 = Article.create!(title: "Tie Article 2", body: "Body for article 2.", created_at: same_time)
+    a3 = Article.create!(title: "Tie Article 3", body: "Body for article 3.", created_at: same_time)
+
+    # In both db-paged and app-sliced, tie-break created_at desc, id desc puts a3 before a2 before a1
+    get articles_url(page: 1, pagination: "db-paged")
+    assert_response :success
+    titles_db = css_select("#articles h2 a").map(&:text).select { |t| t.start_with?("Tie Article") }
+    assert_equal [a3.title, a2.title, a1.title], titles_db
+
+    get articles_url(page: 1, pagination: "app-sliced")
+    assert_response :success
+    titles_app = css_select("#articles h2 a").map(&:text).select { |t| t.start_with?("Tie Article") }
+    assert_equal [a3.title, a2.title, a1.title], titles_app
   end
 
   test "should get new" do
