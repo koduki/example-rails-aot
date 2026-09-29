@@ -67,15 +67,33 @@ function Invoke-WatchAndMerge {
     # with the same workflow and check name. Never ignore the latest result.
     $deadline = (Get-Date).AddMinutes(30)
     do {
-        $raw = & gh pr checks $TargetPr --json name,workflow,event,startedAt,bucket
-        if (-not $raw) {
-            throw "[PR-Train] No PR checks returned (gh exit: $LASTEXITCODE)."
+        $checks = @()
+        $raw = & gh pr checks $TargetPr --json name,workflow,event,startedAt,bucket 2>$null
+        if ($LASTEXITCODE -eq 0 -and $raw) {
+            try {
+                $checks = @(ConvertFrom-Json -InputObject ($raw -join "`n"))
+            }
+            catch {
+                $checks = @()
+            }
         }
-        try {
-            $checks = @(ConvertFrom-Json -InputObject ($raw -join "`n"))
-        }
-        catch {
-            throw "[PR-Train] Could not parse PR checks: $_"
+        if ($checks.Count -eq 0) {
+            $viewJson = (& gh pr view $TargetPr --json statusCheckRollup) | ConvertFrom-Json
+            if ($viewJson.statusCheckRollup) {
+                $checks = @($viewJson.statusCheckRollup | ForEach-Object {
+                    $bucket = if ($_.status -ne "COMPLETED") { "pending" }
+                              elseif ($_.conclusion -in @("SUCCESS", "NEUTRAL")) { "pass" }
+                              elseif ($_.conclusion -eq "SKIPPED") { "skipping" }
+                              else { "fail" }
+                    [PSCustomObject]@{
+                        name = $_.name
+                        workflow = $_.workflowName
+                        event = "pull_request"
+                        startedAt = $_.startedAt
+                        bucket = $bucket
+                    }
+                })
+            }
         }
         if ($checks.Count -eq 0) {
             throw "[PR-Train] No checks registered for PR #$TargetPr."
