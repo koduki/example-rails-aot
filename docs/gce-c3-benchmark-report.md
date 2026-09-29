@@ -7,16 +7,25 @@ The formal two-VM capacity experiment was executed on Google Compute Engine usin
 Under the rigorous benchmarking contract (`rigorous-benchmarking`), **only confirmed per-repetition sustainable capacity is eligible for comparison**, and **no unmeasured capacity is inferred or invented**. 
 
 - **Correctness Gate**: All 9 targets passed strict preflight verification for the primary workload `/articles?page=1` (`app-sliced-page20-1000`).
-- **Capacity Trial Outcomes**: Out of 45 scheduled trials, 29 trials resulted in `failed` (due to client queue saturation under open arrival at offered rates) and 16 trials resulted in `unstable` (due to warmup coefficient of variation or drift exceeding 5% within the 900-second warmup budget). No target achieved a full 5/5 confirmed sustainable rate under the strict 100 ms p99 SLO at the starting rate of 100 RPS.
-- **Key Finding - In-Memory Pagination Overhead**: The `app-sliced-page20-1000` workload requires each request to instantiate and sort 1,000 ActiveRecord objects before slicing 20 rows. For JIT-off variants (both CRuby and JRuby), CPU saturation at 100 RPS resulted in response timeouts exceeding 5,000 ms, causing k6 open-arrival client queue exhaustion.
-- **Key Finding - YJIT Impact**: CRuby with YJIT enabled (`rails-cruby-yjit` and `emit-cruby-yjit`) comfortably handled the 100 RPS offered rate during warmup and initial capacity checks (sub-25 ms latency), but saturated when stepped to 200 RPS.
-- **Key Finding - Spinel Architecture**: Roundhouse Spinel maintained an exceptionally low memory footprint (~145–175 MiB vs CRuby ~500–600 MiB and JRuby ~900–1,200 MiB) pegging all 4 vCPUs efficiently, but exhibited >5% window variance during closed-loop warmup under 32 VUs.
+- **Capacity Trial Outcomes**: Out of 45 scheduled trials, 29 trials resulted in `failed` (client queue saturation under open arrival at offered rates) and 16 trials resulted in `unstable` (warmup coefficient of variation or drift exceeding 5% within the 900-second warmup budget, or budget expiration under repeated timeouts). **No target achieved confirmed sustainable capacity (0/5 valid repetitions across all 9 configurations). Sustainable capacity remains unconfirmed.**
+- **Warmup Execution Model (Closed-Loop 32 VUs)**: Warmup was executed under closed-loop concurrency with 32 VUs (`connections: 32`, `constant-vus` model). Although k6 summary artifacts logged `driver: k6-open-arrival` and `rate_offered: 100`, this was a logger default configuration; warmup throughput was endogenous concurrency, not open arrival at fixed 100 RPS. Open arrival was used only in the subsequent coarse capacity search phases (100, 200 RPS, etc.).
+- **Warmup Failure Breakdown**:
+  - `spinel`: All 5 repetitions (150/150 30-second warmup windows) suffered request failures (total 10,609 failed out of 468,590 requests, 2.26% error rate, window p99 ~5,000 ms timeouts). While classified as `unstable` due to budget expiration without reaching CV ≤ 5%, the primary pathology was continuous 5-second request timeouts under 32 VUs rather than harmless throughput variance (#54).
+  - `emit-jruby-off`: All 5 repetitions (134/134 warmup windows) experienced massive request failures (25,636 failed out of 27,438 requests, 93.43% failure rate, ending successful throughput ~0.35 RPS, p99 ~5,000 ms timeouts). While classified as `unstable` due to budget expiration, this reflects extreme CPU saturation and interpretation overhead rather than slow convergence (#55).
+  - `emit-cruby-off`: 3/5 repetitions were `unstable` with zero request errors but throughput drift/CV exceeding 5% (median ~30.5 RPS), and 2/5 failed at 100 RPS coarse search.
+  - `rails-jruby`: 3/5 repetitions were `unstable` (0.089% failure rate, 280 failed / 313,071 requests), and 2/5 failed at 100 RPS coarse search.
+- **In-Memory Pagination Overhead**: The `app-sliced-page20-1000` workload (`Article.order(created_at: :desc).to_a[0...20]`) delegates sorting (`ORDER BY created_at DESC`) to SQLite at the DB engine level. The severe CPU bottleneck arises because all 1,000 rows are fetched from the database, instantiated into 1,000 ActiveRecord objects in Ruby memory, and then sliced (`[0...20]`) in Ruby. Ruby does *not* sort 1,000 items in memory; rather, instantiating 1,000 Active Record objects and allocating associated strings and hashes on every request generates prohibitive memory allocation and GC overhead for non-JIT configurations.
+- **YJIT Exploration vs Sustainable Capacity**: CRuby with YJIT enabled (`rails-cruby-yjit` 5/5 trials and `emit-cruby-yjit` 4/4 completed trials) comfortably sustained the initial 100 RPS 30-second coarse search step with sub-25 ms latency and zero errors. However, stepping to 200 RPS coarse search saturated 4 vCPUs. Because the harness lacked downward recovery backoff and 120-second sustained confirmation (#51), 5-repetition sustainable capacity remains unconfirmed.
+- **Spinel Architecture & Peak Memory Units**: Roundhouse Spinel maintained an exceptionally low peak container memory footprint (~145–175 MiB across warmup trials, specifically ~150–175 MiB during the 30-window warmup runs, vs CRuby ~450–725 MiB and JRuby ~430–1,200 MiB). The metric is defined as peak container memory in MiB (1 MiB = 1,048,576 bytes, sourced from Linux cgroup v2 `memory.peak` / `memory.current` and Docker engine stats). Crucially, because all trials were failed or unconverged under heavy load, these figures represent peak memory under stress, **not** steady-state confirmed capacity memory consumption.
+- **Cohort Separation**: Historical GitHub Actions smoke results (pilot micro-benchmarks on 3-article fixtures) and this formal GCE c3-standard-4 capacity benchmark represent distinct experimental cohorts and must not be mixed or directly compared.
 
 ---
 
 ## 1. Experiment and Provenance
 
 - **Commit**: `798963437f3d95f959f4fcf61ab2b3d2da82fc55`
+- **Raw Evidence Release**: GitHub Release [gce-c3-capacity-20260928](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-capacity-20260928)
+  - Release archives: `gce-c3-capacity-20260928-raw-artifacts.tar.gz` and `gce-c3-capacity-20260928-raw-artifacts.zip`
 - **Infrastructure**:
   - GCE Project: `sandbox-svc-dev-8rra`, Zone: `asia-northeast1-b`
   - App VM: `bench-app-c3` (Internal IP: `10.146.0.11`, 4 vCPUs / 16 GB, c3-standard-4)
@@ -34,7 +43,13 @@ Under the rigorous benchmarking contract (`rigorous-benchmarking`), **only confi
 - **Workload**: `app-sliced-page20-1000`
   - Endpoint: `GET /articles?page=1`
   - Fixture: 1,000 articles in SQLite
-  - Note: App-level pagination loads the ordered relation then selects 20. Roundhouse Spinel currently lacks ActiveRecord `offset`; this result does not represent DB LIMIT/OFFSET paging.
+  - Note: SQLite executes `ORDER BY created_at DESC`, after which the application loads all 1,000 records into memory, instantiates 1,000 ActiveRecord objects, and slices `[0...20]`. Roundhouse Spinel currently lacks ActiveRecord `offset` (#47); this result does not represent DB LIMIT/OFFSET paging.
+- **Execution Models**:
+  - Warmup: Closed-loop `constant-vus` with 32 VUs (`connections: 32`), 30-second windows (min 180s, max 900s).
+  - Capacity Search: Open-arrival `k6-open-arrival` with offered rates stepping from 100 RPS.
+- **Container Memory Definition**:
+  - Metric: Peak container memory in MiB (`bytes / 1,048,576`), sampled from Linux cgroup v2 (`memory.peak` / `memory.current`) and Docker engine stats.
+  - Phase distinction: Values reflect peak usage during warmup or overload coarse search; steady-state capacity memory is unconfirmed.
 - **SLO Contract**:
   - p99 ≤ 100 ms
   - Error rate < 0.1%
@@ -81,19 +96,19 @@ Preflight manifest and checksums: `bench-results/gce-20260928-c3-capacity/prefli
 
 ## 4. Primary Capacity & Latency Summary
 
-| Target | Confirmed Reps | Median Sustainable RPS | Worst p99 ms | Worst Error % | Mean App CPU % | Peak Memory MB | Warmup Range (s) |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| `rails-cruby-off` | 0/5 | — | — | — | — | ~450–600 | 182–243 |
-| `rails-cruby-yjit` | 0/5 | — | — | — | — | ~580–725 | 212–725 |
-| `rails-jruby-off` | 0/5 | — | — | — | — | ~495–670 | 194–260 |
-| `rails-jruby` | 0/5 | — | — | — | — | ~930–1,200 | 365–912 |
-| `emit-cruby-off` | 0/5 | — | — | — | — | ~160–210 | 556–927 |
-| `emit-cruby-yjit` | 0/5 | — | — | — | — | ~180–230 | 182–575 |
-| `emit-jruby-off` | 0/5 | — | — | — | — | ~430–450 | 907–921 |
-| `emit-jruby` | 0/5 | — | — | — | — | ~660–905 | 243–396 |
-| `spinel` | 0/5 | — | — | — | — | ~150–175 | 914–917 |
+| Target | Confirmed Reps | Median Sustainable RPS | Worst p99 ms | Worst Error % | Mean App CPU % | Peak Container Memory (MiB)* | Warmup Window Errors (Failed/Total Reqs) | Outcome Summary |
+|---|---:|---:|---:|---:|---:|---:|---|---|
+| `rails-cruby-off` | 0/5 | — | — | — | — | ~450–600 | 0 / 79,025 (0%, 34 windows) | 5 failed at 100 RPS coarse search |
+| `rails-cruby-yjit` | 0/5 | — | — | — | — | ~580–725 | 0 / 282,730 (0%, 62 windows) | 5 passed 100 RPS coarse; failed at 200 RPS coarse (unconfirmed) |
+| `rails-jruby-off` | 0/5 | — | — | — | — | ~495–670 | 1 / 12,702 (0.008%, 32 windows) | 5 failed at 100 RPS coarse search |
+| `rails-jruby` | 0/5 | — | — | — | — | ~930–1,200 | 280 / 313,071 (0.089%, 129 windows) | 3 unstable (CV > 5%), 2 failed at 100 RPS coarse search |
+| `emit-cruby-off` | 0/5 | — | — | — | — | ~160–210 | 0 / 125,623 (0%, 134 windows) | 3 unstable (CV > 5%), 2 failed at 100 RPS coarse search |
+| `emit-cruby-yjit` | 0/5 | — | — | — | — | ~180–230 | 0 / 225,888 (0%, 65 windows) | 4 passed 100 RPS coarse, failed at 200 RPS coarse; 1 remote transfer error |
+| `emit-jruby-off` | 0/5 | — | — | — | — | ~430–450 | 25,636 / 27,438 (93.43%, 134 windows) | 5 unstable (continuous timeouts; ~0.35 RPS; #55) |
+| `emit-jruby` | 0/5 | — | — | — | — | ~660–905 | 0 / 106,565 (0%, 51 windows) | 5 failed at 100 RPS coarse search |
+| `spinel` | 0/5 | — | — | — | — | ~145–175 | 10,609 / 468,590 (2.26%, 150 windows) | 5 unstable (continuous ~5s timeouts in all 150 windows; #54) |
 
-*Note: In accordance with repository benchmark policy, incomplete targets or targets without 5 confirmed repetitions have no aggregate sustainable capacity.*
+*\*Note on Peak Container Memory & Capacity*: In accordance with the repository benchmarking contract, targets without 5 confirmed repetitions under the 120-second SLO have no aggregate sustainable capacity (reported as `—`). Peak Container Memory values (in MiB = 1,048,576 bytes) were captured during overloaded or unconverged trials (closed-loop 32 VU warmup or open-arrival coarse search saturation); steady-state capacity memory remains unconfirmed.
 
 ---
 
@@ -102,66 +117,72 @@ Preflight manifest and checksums: `bench-results/gce-20260928-c3-capacity/prefli
 | Trial ID | Target | Rep | Status | Warmup (s) | Outcome Detail |
 |---|---|---:|---|---:|---|
 | `0000` | `rails-jruby` | 1 | `unstable` | 912.1 | Warmup variance exceeded 5% CV / drift across 4 windows |
-| `0001` | `rails-jruby-off` | 1 | `failed` | 194.5 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0002` | `emit-jruby` | 1 | `failed` | 273.7 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0003` | `emit-jruby-off` | 1 | `unstable` | 916.6 | Warmup variance exceeded 5% CV / drift across 4 windows |
-| `0004` | `rails-cruby-yjit` | 1 | `failed` | 724.8 | Client saturation at 200 RPS coarse search |
-| `0005` | `rails-cruby-off` | 1 | `failed` | 182.7 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0006` | `emit-cruby-yjit` | 1 | `failed` | 182.2 | Client saturation at 200 RPS coarse search |
-| `0007` | `emit-cruby-off` | 1 | `failed` | 803.1 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0008` | `spinel` | 1 | `unstable` | 915.2 | Warmup variance exceeded 5% CV / drift across 4 windows |
+| `0001` | `rails-jruby-off` | 1 | `failed` | 194.5 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0002` | `emit-jruby` | 1 | `failed` | 273.7 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0003` | `emit-jruby-off` | 1 | `unstable` | 916.6 | Warmup budget expired (27 windows); severe timeouts (93.4% failures, p99 ~5s; #55) |
+| `0004` | `rails-cruby-yjit` | 1 | `failed` | 724.8 | Client saturation at 200 RPS coarse search (100 RPS passed with sub-25ms p99) |
+| `0005` | `rails-cruby-off` | 1 | `failed` | 182.7 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0006` | `emit-cruby-yjit` | 1 | `failed` | 182.2 | Client saturation at 200 RPS coarse search (100 RPS passed with sub-25ms p99) |
+| `0007` | `emit-cruby-off` | 1 | `failed` | 803.1 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0008` | `spinel` | 1 | `unstable` | 915.2 | Warmup budget expired (30 windows); continuous timeouts in all 30 windows (2.26% failures, p99 ~5s; #54) |
 | `0009` | `rails-jruby` | 2 | `unstable` | 912.2 | Warmup variance exceeded 5% CV / drift across 4 windows |
-| `0010` | `spinel` | 2 | `unstable` | 917.5 | Warmup variance exceeded 5% CV / drift across 4 windows |
-| `0011` | `emit-cruby-off` | 2 | `unstable` | 927.0 | Warmup variance exceeded 5% CV / drift across 4 windows |
-| `0012` | `emit-cruby-yjit` | 2 | `failed` | 575.2 | Client saturation at 200 RPS coarse search |
-| `0013` | `rails-cruby-off` | 2 | `failed` | 212.9 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0014` | `rails-cruby-yjit` | 2 | `failed` | 211.6 | Client saturation at 200 RPS coarse search |
-| `0015` | `emit-jruby-off` | 2 | `unstable` | 920.8 | Warmup variance exceeded 5% CV / drift across 4 windows |
-| `0016` | `emit-jruby` | 2 | `failed` | 273.8 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0017` | `rails-jruby-off` | 2 | `failed` | 195.2 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0018` | `emit-jruby` | 3 | `failed` | 365.5 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0019` | `emit-jruby-off` | 3 | `unstable` | 907.0 | Warmup variance exceeded 5% CV / drift across 4 windows |
-| `0020` | `rails-cruby-yjit` | 3 | `failed` | 332.4 | Client saturation at 200 RPS coarse search |
-| `0021` | `rails-cruby-off` | 3 | `failed` | 243.3 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0022` | `emit-cruby-yjit` | 3 | `failed` | 423.8 | Client saturation at 200 RPS coarse search |
-| `0023` | `emit-cruby-off` | 3 | `unstable` | 926.6 | Warmup variance exceeded 5% CV / drift across 4 windows |
-| `0024` | `spinel` | 3 | `unstable` | 916.8 | Warmup variance exceeded 5% CV / drift across 4 windows |
+| `0010` | `spinel` | 2 | `unstable` | 917.5 | Warmup budget expired (30 windows); continuous timeouts in all 30 windows (2.26% failures, p99 ~5s; #54) |
+| `0011` | `emit-cruby-off` | 2 | `unstable` | 927.0 | Warmup throughput variance exceeded 5% CV / drift (0 request errors, median ~30.5 RPS) |
+| `0012` | `emit-cruby-yjit` | 2 | `failed` | 575.2 | Client saturation at 200 RPS coarse search (100 RPS passed with sub-25ms p99) |
+| `0013` | `rails-cruby-off` | 2 | `failed` | 212.9 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0014` | `rails-cruby-yjit` | 2 | `failed` | 211.6 | Client saturation at 200 RPS coarse search (100 RPS passed with sub-25ms p99) |
+| `0015` | `emit-jruby-off` | 2 | `unstable` | 920.8 | Warmup budget expired (27 windows); severe timeouts (93.4% failures, p99 ~5s; #55) |
+| `0016` | `emit-jruby` | 2 | `failed` | 273.8 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0017` | `rails-jruby-off` | 2 | `failed` | 195.2 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0018` | `emit-jruby` | 3 | `failed` | 365.5 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0019` | `emit-jruby-off` | 3 | `unstable` | 907.0 | Warmup budget expired (26 windows); severe timeouts (93.4% failures, p99 ~5s; #55) |
+| `0020` | `rails-cruby-yjit` | 3 | `failed` | 332.4 | Client saturation at 200 RPS coarse search (100 RPS passed with sub-25ms p99) |
+| `0021` | `rails-cruby-off` | 3 | `failed` | 243.3 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0022` | `emit-cruby-yjit` | 3 | `failed` | 423.8 | Client saturation at 200 RPS coarse search (100 RPS passed with sub-25ms p99) |
+| `0023` | `emit-cruby-off` | 3 | `unstable` | 926.6 | Warmup throughput variance exceeded 5% CV / drift (0 request errors, median ~30.5 RPS) |
+| `0024` | `spinel` | 3 | `unstable` | 916.8 | Warmup budget expired (30 windows); continuous timeouts in all 30 windows (2.26% failures, p99 ~5s; #54) |
 | `0025` | `rails-jruby` | 3 | `unstable` | 911.2 | Warmup variance exceeded 5% CV / drift across 4 windows |
-| `0026` | `rails-jruby-off` | 3 | `failed` | 194.6 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0027` | `emit-jruby` | 4 | `failed` | 243.5 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0028` | `rails-jruby-off` | 4 | `failed` | 194.3 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0029` | `rails-jruby` | 4 | `failed` | 819.9 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0030` | `spinel` | 4 | `unstable` | 914.0 | Warmup variance exceeded 5% CV / drift across 4 windows |
-| `0031` | `emit-cruby-off` | 4 | `unstable` | 927.2 | Warmup variance exceeded 5% CV / drift across 4 windows |
-| `0032` | `emit-cruby-yjit` | 4 | `failed` | 0.0 | Remote artifact transfer transient network error |
-| `0033` | `rails-cruby-off` | 4 | `failed` | 213.1 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0034` | `rails-cruby-yjit` | 4 | `failed` | 302.1 | Client saturation at 200 RPS coarse search |
-| `0035` | `emit-jruby-off` | 4 | `unstable` | 914.7 | Warmup variance exceeded 5% CV / drift across 4 windows |
-| `0036` | `rails-cruby-yjit` | 5 | `failed` | 302.1 | Client saturation at 200 RPS coarse search |
-| `0037` | `rails-cruby-off` | 5 | `failed` | 182.5 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0038` | `emit-cruby-yjit` | 5 | `failed` | 302.7 | Client saturation at 200 RPS coarse search |
-| `0039` | `emit-cruby-off` | 5 | `failed` | 555.6 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0040` | `spinel` | 5 | `unstable` | 916.1 | Warmup variance exceeded 5% CV / drift across 4 windows |
-| `0041` | `rails-jruby` | 5 | `failed` | 365.4 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0042` | `rails-jruby-off` | 5 | `failed` | 259.6 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0043` | `emit-jruby` | 5 | `failed` | 395.5 | Client saturation at 100 RPS (request timeouts > 5s) |
-| `0044` | `emit-jruby-off` | 5 | `unstable` | 916.3 | Warmup variance exceeded 5% CV / drift across 4 windows |
+| `0026` | `rails-jruby-off` | 3 | `failed` | 194.6 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0027` | `emit-jruby` | 4 | `failed` | 243.5 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0028` | `rails-jruby-off` | 4 | `failed` | 194.3 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0029` | `rails-jruby` | 4 | `failed` | 819.9 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0030` | `spinel` | 4 | `unstable` | 914.0 | Warmup budget expired (30 windows); continuous timeouts in all 30 windows (2.26% failures, p99 ~5s; #54) |
+| `0031` | `emit-cruby-off` | 4 | `unstable` | 927.2 | Warmup throughput variance exceeded 5% CV / drift (0 request errors, median ~30.5 RPS) |
+| `0032` | `emit-cruby-yjit` | 4 | `failed` | 0.0 | Remote artifact transfer transient network error (SCP failed after trial execution; #51) |
+| `0033` | `rails-cruby-off` | 4 | `failed` | 213.1 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0034` | `rails-cruby-yjit` | 4 | `failed` | 302.1 | Client saturation at 200 RPS coarse search (100 RPS passed with sub-25ms p99) |
+| `0035` | `emit-jruby-off` | 4 | `unstable` | 914.7 | Warmup budget expired (27 windows); severe timeouts (93.4% failures, p99 ~5s; #55) |
+| `0036` | `rails-cruby-yjit` | 5 | `failed` | 302.1 | Client saturation at 200 RPS coarse search (100 RPS passed with sub-25ms p99) |
+| `0037` | `rails-cruby-off` | 5 | `failed` | 182.5 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0038` | `emit-cruby-yjit` | 5 | `failed` | 302.7 | Client saturation at 200 RPS coarse search (100 RPS passed with sub-25ms p99) |
+| `0039` | `emit-cruby-off` | 5 | `failed` | 555.6 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0040` | `spinel` | 5 | `unstable` | 916.1 | Warmup budget expired (30 windows); continuous timeouts in all 30 windows (2.26% failures, p99 ~5s; #54) |
+| `0041` | `rails-jruby` | 5 | `failed` | 365.4 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0042` | `rails-jruby-off` | 5 | `failed` | 259.6 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0043` | `emit-jruby` | 5 | `failed` | 395.5 | Client saturation at 100 RPS coarse search (request timeouts > 5s) |
+| `0044` | `emit-jruby-off` | 5 | `unstable` | 916.3 | Warmup budget expired (27 windows); severe timeouts (93.4% failures, p99 ~5s; #55) |
 
 ---
 
 ## 6. Technical Analysis & Dynamics
 
 ### A. JIT Impact on In-Memory Slicing
-The `app-sliced-page20-1000` query (`Article.order(created_at: :desc).to_a[0...20]`) loads all 1,000 articles from SQLite into Ruby memory and instantiates 1,000 ActiveRecord objects per request.
-- **Without JIT** (`rails-cruby-off`, `rails-jruby-off`, `emit-cruby-off`, `emit-jruby-off`): The CPU cost of object allocation and Ruby bytecode interpretation is too severe to sustain 100 requests per second across 4 vCPUs. Request latencies quickly exceeded the 5-second HTTP timeout, causing k6 open-arrival client queue saturation.
-- **With YJIT** (`rails-cruby-yjit`, `emit-cruby-yjit`): YJIT compiles method call dispatches and object allocation fast paths, allowing CRuby to successfully sustain 100 RPS during warmup with sub-25ms latency. However, doubling the arrival rate to 200 RPS pegged all 4 vCPUs at 100% utilization, exceeding the capacity threshold.
+The `app-sliced-page20-1000` query (`Article.order(created_at: :desc).to_a[0...20]`) delegates ordering to SQLite via SQL `ORDER BY created_at DESC`. SQLite executes the sort inside the database engine; the application bottleneck is that all 1,000 records are fetched from SQLite into application memory and instantiated as 1,000 ActiveRecord objects per request before slicing the first 20 records (`[0...20]`). Ruby does *not* perform the 1,000-item sort in application code. Rather, instantiating 1,000 Active Record model objects per request produces massive object allocation, pointer chasing, and garbage collection pressure.
+- **Without JIT** (`rails-cruby-off`, `rails-jruby-off`, `emit-cruby-off`, `emit-jruby-off`): Object allocation and Ruby bytecode interpretation consumed 100% of 4 vCPUs even at 100 requests per second. Request latencies quickly exceeded the 5-second HTTP timeout, causing k6 open-arrival client queue exhaustion and trial failure.
+- **With YJIT** (`rails-cruby-yjit`, `emit-cruby-yjit`): YJIT compiles method call dispatches, instance variable access, and allocation fast paths, allowing CRuby to successfully sustain 100 RPS during coarse search with sub-25 ms p99 latency and zero errors. However, stepping the arrival rate to 200 RPS pegged all 4 vCPUs at 100% utilization, exceeding capacity. Because the test harness lacked downward recovery search and 120-second sustained confirmation (#51), 5-repetition sustainable capacity remains unconfirmed.
 
-### B. Roundhouse Spinel Memory Efficiency & Convergence
-- **Memory Footprint**: Spinel exhibited extraordinary memory efficiency, consuming only **150–175 MiB** of RAM under heavy load. In contrast, standard Rails on CRuby required **~580–725 MiB**, and JRuby required **~930–1,200 MiB**.
-- **Warmup Stability**: Under closed-loop 32-VU concurrency, Spinel achieved high raw throughput, but the strict 5% coefficient of variation (CV) and 5% drift threshold across four consecutive 30-second windows was not met before the 900-second warmup ceiling expired. This correctly yielded `unstable` under preregistered criteria.
+### B. Roundhouse Spinel Memory Efficiency & Concurrency Dynamics
+- **Memory Footprint**: Spinel maintained an exceptionally low container memory footprint (~145–175 MiB across warmup trials, specifically ~150–175 MiB across the 30-window warmup runs, vs CRuby ~450–725 MiB and JRuby ~430–1,200 MiB). The metric is defined as peak container memory in MiB (1 MiB = 1,048,576 bytes, sourced from Linux cgroup v2 `memory.peak` / `memory.current` and Docker engine stats). Crucially, because all trials were failed or unconverged under heavy load, these figures represent peak memory under stress, **not** steady-state confirmed capacity memory consumption.
+- **Warmup Stability & Persistent Timeouts**: Under closed-loop 32-VU concurrency, Spinel did *not* merely experience mild variance exceeding the 5% CV / drift threshold. In all 150/150 30-second warmup windows across all 5 repetitions, Spinel experienced continuous request timeouts (cumulative 10,609 failed out of 468,590 requests, 2.26% error rate, window p99 ~5,000 ms). It pegged all 4 vCPUs, but requests frequently stalled. Rather than asserting high efficiency, this pathology points to request queue stalls, SQLite lock contention, or worker starvation under 32 concurrent clients. Issue #54 will conduct detailed diagnostics.
 
-### C. Architectural Distinction
+### C. Emitted JRuby JIT-Off Severe Failure Analysis
+`emit-jruby-off` experienced 134/134 warmup windows with request failures (cumulative 25,636 failed out of 27,438 requests, 93.43% failure rate, ending successful throughput ~0.35 RPS, p99 ~5,000 ms). Although marked `unstable` due to budget exhaustion, this was catastrophic saturation under Ruby bytecode interpretation rather than slow convergence. In contrast, standard Rails on JRuby JIT Off achieved ~12.5 RPS with near-zero errors under the same 32 VUs. Issue #55 will isolate whether this is interpreter overhead, JFR/JVM threads, or SQLite locking.
+
+### D. Architectural Distinction
 Spinel is a complete native execution architecture comprising native AOT compilation, HTTP parser, SQLite DB adapter, coroutine scheduling, and GC. Performance and resource differences observed in Spinel are attributable to this full architectural redesign, not isolated compiler code emission alone.
+
+### E. Cohort Separation
+Historical GitHub Actions smoke tests (3 articles, shared hosted runner, brief burst) and GCE C3 capacity benchmark (1,000 articles, dedicated bare-metal VMs, private VPC) are fundamentally distinct experimental cohorts and must not be mixed or used to calculate cross-cohort speedup ratios.
 
 ---
 
@@ -194,11 +215,17 @@ To eliminate ongoing GCP compute charges:
 
 ## 8. Artifact Provenance & Replication
 
-All raw logs, Docker metrics, host telemetry, k6 open-arrival summaries, and build logs are preserved locally:
-- Benchmark Results: `bench-results/gce-20260928-c3-capacity/`
+All raw logs, Docker metrics, host telemetry, k6 open-arrival summaries, and build logs are preserved and indexed:
+- **Evaluated Target Commit**: `798963437f3d95f959f4fcf61ab2b3d2da82fc55`
+- **GitHub Release Evidence**: [gce-c3-capacity-20260928](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-capacity-20260928)
+  - `gce-c3-capacity-20260928-raw-artifacts.tar.gz`
+  - `gce-c3-capacity-20260928-raw-artifacts.zip`
+- **Benchmark Results Directory**: `bench-results/gce-20260928-c3-capacity/`
   - `gce-summary.json` & `gce-summary.md`
-  - `plan.json`, `env.json`, `cleanup.json`
-  - `preflight/` (manifest, captured responses, equivalence checks)
-  - `trials/` (0000 through 0044 raw per-step telemetry, k6 logs, cpu/memory traces)
-- Build Logs: `bench-results/build-20260928-c3-capacity/`
-- Preflight Captures: `bench-results/preflight-20260928-c3-capacity/`
+  - `plan.json` (SHA-256: `05cb16cc749a0c72dc9f8eb25caae5d23aa5840401612220d2ba104b452e9578`)
+  - `env.json` (SHA-256: `19d2dc34e78713db77b4bf31fed09d27a65e497e18aa734415e4406bec2eee46`)
+  - `cleanup.json`: Verification of both instances reaching `TERMINATED`
+  - `preflight/`: Manifest, captured response hashes, and equivalence checks (`preflight-manifest.json`)
+  - `trials/`: Trials `0000` through `0044` with per-step telemetry, k6 logs, server logs, container state, and per-window warmup summaries (`warmup-000` through `warmup-029`)
+- **Build Logs**: `bench-results/build-20260928-c3-capacity/`
+- **Preflight Captures**: `bench-results/preflight-20260928-c3-capacity/`
