@@ -685,7 +685,16 @@ def trials(p, cpus, output, checks):
                                 target_start = (p.get('target_capacity_start_rps') or {}).get(trial['target'])
                                 if target_start:
                                     trial_p['capacity_start_rps'] = target_start
-                                capacity_result = capacity.search(measure, trial_p)
+                                try:
+                                    capacity_result = capacity.search(measure, trial_p)
+                                except Exception as e:
+                                    save(directory / 'capacity-search.json', {
+                                        'status': 'error',
+                                        'error': str(e),
+                                        'capacity_steps': steps_seen,
+                                        'steps': getattr(e, 'steps', [])
+                                    })
+                                    raise
                                 save(directory / 'capacity-search.json', capacity_result)
                                 row['capacity_rps'] = capacity_result['capacity_rps']
                                 row['offered_rps'] = capacity_result['offered_rps']
@@ -734,7 +743,8 @@ def trials(p, cpus, output, checks):
                             row.update(diagnostics=diag_data)
                     save(directory / 'trial.json', row)
             except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
-                row.update(status='failed', reason=str(e))
+                status = 'transport_or_artifact_error' if 'artifact transfer' in str(e).lower() else 'failed'
+                row.update(status=status, reason=str(e))
         save(output / 'per-run.json', result)
     return result
 
