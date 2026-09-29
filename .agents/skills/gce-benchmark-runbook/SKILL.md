@@ -30,7 +30,7 @@ Use the repository's `bench/profiles/gce-c3-capacity.yml` and [formal experiment
 
    The preflight manifest next to `preflight.json` binds the code, image IDs and target coverage; rerun preflight after any change. Do not run the quick or hosted `full` profile as a replacement.
 
-   The formal capacity run executes 45 trials (9 targets × 5 repetitions) with warmup, search, and confirmation. On the `app-sliced-page20-1000` workload, this takes approximately ~11–13 hours because JIT-off targets require the maximum 900-second closed-loop warmup budget. To prevent SSH connection drops from aborting the run, launch it in a detached `tmux` session on `bench-app-c3`:
+   The formal capacity run executes 45 trials (9 targets × 5 repetitions) with warmup, search, and confirmation. With adaptive warmup early exit (`warmup_fail_fast_windows`) and tuned convergence thresholds (`max_cv: 0.08`), execution takes approximately ~4–6 hours (down from ~11–13 hours previously where JIT-off variants consumed all 900s of warmup budget). To prevent SSH connection drops from aborting the run, launch it in a detached `tmux` session on `bench-app-c3`:
    ```bash
    tmux new-session -d -s bench 'python3 scripts/bench/run.py run \
      --profile bench/profiles/gce-c3-capacity.yml \

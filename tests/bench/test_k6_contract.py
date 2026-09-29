@@ -92,8 +92,8 @@ const data = {state: {testRunDurationMs: 10000}, metrics: {
             with self.assertRaisesRegex(RuntimeError, 'no normalized summary'):
                 run.sample(server, '/articles', 5, p, {'client': [1]}, d)
             args = command.call_args.args[0]
-            self.assertEqual(args[:5], ['docker', 'run', '--rm', '--user',
-                                        f'{os.getuid()}:{os.getgid()}'])
+            uid_gid = f'{os.getuid()}:{os.getgid()}' if hasattr(os, 'getuid') else '1000:1000'
+            self.assertEqual(args[:5], ['docker', 'run', '--rm', '--user', uid_gid])
 
     def test_runner_rejects_stale_summary(self):
         server = Mock(url='http://localhost:3000')

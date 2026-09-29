@@ -131,7 +131,7 @@ class ReportUnitTests(unittest.TestCase):
                 'rails-cruby-off': {'eligible_endpoints': ['/articles']}}))
             (root / 'trials/per-run.json').write_text(json.dumps(trial))
             report.build_report(root)
-            markdown = (root / 'summary.md').read_text()
+            markdown = (root / 'summary.md').read_text(encoding='utf-8')
             self.assertIn('✅ verified (functional only)', markdown)
             self.assertIn('✅ verified | Functional smoke only; no convergence claim | - | - | - | - | 0.00%', markdown)
             self.assertNotIn('❌ verified', markdown)
@@ -174,7 +174,7 @@ class ReportUnitTests(unittest.TestCase):
             (root / 'trials/per-run.json').write_text(json.dumps(rows))
             data = report.build_report(root)
             self.assertIsNone(data['pairwise_comparisons'][0]['jruby_compile_mode_ratio']['rails'])
-            md = (root / 'summary.md').read_text()
+            md = (root / 'summary.md').read_text(encoding='utf-8')
             self.assertIn('⚠️ incomplete | 1/3', md)
             self.assertIn('✅ passed | 3/3', md)
 
@@ -200,11 +200,11 @@ class ReportUnitTests(unittest.TestCase):
             self.assertEqual(data['metric_basis'], 'operation')
             self.assertEqual(row['rps']['median'], 30)
             self.assertEqual(row['p99_ms']['median'], 32)
-            markdown = (root / 'summary.md').read_text()
+            markdown = (root / 'summary.md').read_text(encoding='utf-8')
             self.assertIn('Median Operations/s', markdown)
             self.assertIn('Median Op p99 (ms)', markdown)
             self.assertIn('| 30 | 12 | 20 | 32 |', markdown)
-            self.assertIn('operations_per_second_median', (root / 'summary.csv').read_text())
+            self.assertIn('operations_per_second_median', (root / 'summary.csv').read_text(encoding='utf-8'))
 
             measurement.pop('operation_latency_ms')
             (root / 'trials/per-run.json').write_text(json.dumps([{
