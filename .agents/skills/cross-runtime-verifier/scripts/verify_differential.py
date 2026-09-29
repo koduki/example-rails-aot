@@ -18,6 +18,7 @@ from scripts.bench.preflight import canonical  # noqa: E402
 
 ENDPOINTS = [
     ("/articles", "text/html"),
+    ("/articles?page=1&pagination=db-paged", "text/html"),
     ("/articles/1", "text/html"),
     ("/articles/new", "text/html"),
     ("/articles.json", "application/json"),

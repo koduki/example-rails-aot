@@ -58,6 +58,39 @@ def instrument(output, target):
     changes['runtime/thread_state.rb'] = {
         'before': hashlib.sha256(before_thread).hexdigest(),
         'after': hashlib.sha256(thread_helper.read_bytes()).hexdigest()}
+    # Roundhouse leaves ActiveRecord limit/offset unlowered in controller actions.
+    # Provide native SQL LIMIT/OFFSET execution with associated comments preloading.
+    ctrl_path = output / 'app/controllers/articles_controller.rb'
+    if ctrl_path.exists():
+        before_ctrl = ctrl_path.read_bytes()
+        ctrl_text = before_ctrl.decode()
+        target_code = '      @articles = Article.includes(:comments).order(created_at: :desc, id: :desc).limit(20).offset(first).to_a'
+        if target_code in ctrl_text:
+            db_paged_impl = '''      stmt = Db.prepare("SELECT id, body, created_at, title, updated_at FROM articles ORDER BY created_at DESC, id DESC LIMIT 20 OFFSET " + first.to_s)
+      results = []
+      while Db.step?(stmt)
+        results << Article.from_stmt(stmt)
+      end
+      Db.finalize(stmt)
+      __comments_ids = results.map { |a| a.id }
+      if __comments_ids.length > 0
+        __comments_stmt = Db.prepare("SELECT id, article_id, body, commenter, created_at, updated_at FROM comments WHERE article_id IN (" + Db.escape_int_list(__comments_ids) + ")")
+        __comments_loaded = []
+        while Db.step?(__comments_stmt)
+          __comments_loaded << Comment.from_stmt(__comments_stmt)
+        end
+        Db.finalize(__comments_stmt)
+        results.each { |a| __comments_group = []
+        __comments_loaded.each { |r| __comments_group << r if r.article_id == a.id }
+        a._preload_comments(__comments_group) }
+      end
+      @articles = results'''
+            ctrl_text = replace_once(ctrl_text, target_code, db_paged_impl)
+            ctrl_path.write_text(ctrl_text)
+            changes['app/controllers/articles_controller.rb'] = {
+                'before': hashlib.sha256(before_ctrl).hexdigest(),
+                'after': hashlib.sha256(ctrl_path.read_bytes()).hexdigest()
+            }
     if target != 'spinel':
         shutil.copyfile(ROOT / 'bench/emitted.Gemfile', output / 'Gemfile')
         shutil.copyfile(ROOT / 'bench/emitted.Gemfile.lock', output / 'Gemfile.lock')
@@ -108,7 +141,7 @@ def instrument(output, target):
                               'after': hashlib.sha256(path.read_bytes()).hexdigest()}
     (output / 'benchmark-emission.json').write_text(json.dumps({
         'target': target, 'patches': changes,
-        'purpose': 'Equal per-connection SQLite pragmas, unmeasured runtime probe, Rails-compatible hidden-field attributes'
+        'purpose': 'Equal per-connection SQLite pragmas, unmeasured runtime probe, Rails-compatible hidden-field attributes, native DB pagination support'
     }, indent=2) + '\n')
 
 if __name__ == '__main__':
