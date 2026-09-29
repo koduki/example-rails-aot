@@ -164,6 +164,57 @@ class DiagnosticUnitTests(unittest.TestCase):
             self.assertIn('実測事実', md)
             self.assertIn('説明を支持する観測', md)
             self.assertIn('未検証の仮説', md)
+            self.assertIn('Runtime Failure Diagnosis and Viable Load Envelopes', md)
+
+    def test_failure_taxonomy_classification(self):
+        windows = [
+            {'requests_total': 100, 'requests_failed': 90, 'errors': 90, 'latency_ms': {'max': 5001.0, 'p99': 5000.5}},
+            {'requests_total': 100, 'requests_failed': 0, 'errors': 0, 'latency_ms': {'max': 100.0, 'p99': 50.0}},
+            {'requests_total': 100, 'requests_failed': 10, 'errors': 10, 'latency_ms': {'max': 200.0, 'p99': 150.0}},
+        ]
+        tax = diagnostic.analyze_failure_taxonomy(windows)
+        self.assertEqual(tax['total_windows'], 3)
+        self.assertEqual(tax['failed_windows'], 2)
+        self.assertEqual(tax['failed_windows_pct'], 66.67)
+        self.assertEqual(tax['total_requests'], 300)
+        self.assertEqual(tax['failed_requests'], 100)
+        self.assertEqual(tax['error_rate_pct'], 33.33)
+        self.assertEqual(tax['timeout_failures'], 90)
+        self.assertEqual(tax['http_failures'], 10)
+
+    def test_concurrency_and_queuing_jruby_off(self):
+        windows = [
+            {'elapsed': 30.0, 'requests_total': 204, 'requests_successful': 12, 'requests_failed': 192,
+             'rps_successful': 0.4, 'vus_peak': 32, 'latency_ms': {'min': 1447.0, 'med': 5000.0, 'p95': 5000.8, 'p99': 5001.1}}
+        ]
+        cpu_start = {'cpu.stat': 'usage_usec 0\nuser_usec 0\nsystem_usec 0\nnr_throttled 0'}
+        cpu_end = {'cpu.stat': 'usage_usec 120000000\nuser_usec 119880000\nsystem_usec 120000\nnr_throttled 0'}
+        q = diagnostic.analyze_concurrency_and_queuing(windows, cpu_start, cpu_end, num_threads=4, target_name='emit-jruby-off')
+        self.assertEqual(q['concurrency_vus'], 32)
+        self.assertEqual(q['threads'], 4)
+        self.assertEqual(q['estimated_service_time_ms'], 1447.0)
+        # Max theoretical RPS = 4 / 1.447 = 2.76
+        self.assertAlmostEqual(q['max_theoretical_throughput_rps'], 2.76, places=2)
+        # Estimated queue depth = 32 - 4 = 28
+        self.assertEqual(q['estimated_queue_depth'], 28)
+        # Queue delay = 28 * (1447 / 4) = 10129 ms > 5000 ms timeout
+        self.assertGreater(q['estimated_queue_delay_ms'], 5000.0)
+        self.assertIn('Interpreter CPU saturation', q['root_cause'])
+        self.assertAlmostEqual(q['cpu_metrics']['pct_user'], 99.9, places=1)
+
+    def test_viable_load_envelope(self):
+        # emit-jruby-off with 1447ms service time
+        env_jruby = diagnostic.compute_viable_load_envelope('emit-jruby-off', 1447.0, num_threads=4, slo_p99_ms=100.0)
+        self.assertEqual(env_jruby['status'], 'unsupported_for_capacity_ranking')
+        self.assertFalse(env_jruby['slo_achievable'])
+        self.assertLessEqual(env_jruby['max_viable_concurrency_vus_no_timeout'], 13)
+        self.assertLessEqual(env_jruby['safe_open_arrival_rps'], 2.5)
+
+        # spinel with 15ms service time
+        env_spinel = diagnostic.compute_viable_load_envelope('spinel', 15.0, num_threads=4, slo_p99_ms=100.0)
+        self.assertEqual(env_spinel['status'], 'conditionally_viable')
+        self.assertTrue(env_spinel['slo_achievable'])
+        self.assertGreater(env_spinel['safe_open_arrival_rps'], 50.0)
 
 if __name__ == '__main__':
     unittest.main()

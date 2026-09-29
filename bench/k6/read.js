@@ -4,6 +4,7 @@ import { Counter } from 'k6/metrics';
 
 const checkFailures = new Counter('check_failures');
 const successfulRequests = new Counter('successful_requests');
+const integrityFailures = new Counter('integrity_failures');
 
 const rate = Number(__ENV.RATE || 50);
 const duration = __ENV.DURATION || '30s';
@@ -48,16 +49,57 @@ export default function () {
   const contentType = (res.headers['Content-Type'] || res.headers['content-type'] || '').toLowerCase();
   const ctOk = isJson ? contentType.includes('application/json') : contentType.includes('text/html');
 
+  // Response integrity check: detect truncated, incomplete, or corrupted HTTP 200 bodies
+  let integrityOk = true;
+  if (statusOk && bodyOk) {
+    if (isJson) {
+      const trimmed = res.body.trim();
+      if (!trimmed.endsWith(']') && !trimmed.endsWith('}')) {
+        integrityOk = false;
+      } else {
+        const expectedCount = Number(__ENV.EXPECTED_ARTICLES || 20);
+        if (!url.match(/\/articles\/\d+/) && !url.includes('/new') && expectedCount > 0) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed) && parsed.length < expectedCount) {
+              integrityOk = false;
+            }
+          } catch (e) {
+            integrityOk = false;
+          }
+        }
+      }
+    } else {
+      if (!res.body.includes('</html>')) {
+        integrityOk = false;
+      } else {
+        const expectedCount = Number(__ENV.EXPECTED_ARTICLES || 20);
+        if (!url.match(/\/articles\/\d+/) && !url.includes('/new') && expectedCount > 0) {
+          const matchCount = (res.body.match(/Article \d+/g) || []).length;
+          if (matchCount < expectedCount) {
+            integrityOk = false;
+          }
+        }
+      }
+    }
+  } else {
+    integrityOk = false;
+  }
+
   const passed = check(res, {
     'status 200': () => statusOk,
     'non-empty body': () => bodyOk,
     'expected content-type': () => ctOk,
+    'response integrity': () => integrityOk,
   });
 
   if (passed) {
     successfulRequests.add(1);
   } else {
     checkFailures.add(1);
+    if (!integrityOk) {
+      integrityFailures.add(1);
+    }
   }
 }
 
@@ -70,6 +112,7 @@ export function handleSummary(data) {
   const vus = metrics.vus ? metrics.vus.values : {};
   const reqs = metrics.http_reqs ? metrics.http_reqs.values : {};
   const successes = metrics.successful_requests ? metrics.successful_requests.values : { count: 0 };
+  const integrity = metrics.integrity_failures ? metrics.integrity_failures.values : { count: 0 };
   const elapsed = data.state && data.state.testRunDurationMs
     ? data.state.testRunDurationMs / 1000 : Number.parseInt(duration, 10);
   const total = reqs.count || 0;
@@ -91,6 +134,7 @@ export function handleSummary(data) {
     requests_successful: successful,
     requests_failed: Math.max(0, total - successful),
     errors: Math.max(0, total - successful),
+    integrity_errors: integrity.count || 0,
     rps: successful / elapsed,
     p95_ms: latency['p(95)'] || 0,
     rps_effective: reqs.rate || 0,
