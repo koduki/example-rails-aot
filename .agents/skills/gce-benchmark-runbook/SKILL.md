@@ -52,4 +52,18 @@ Use the repository's `bench/profiles/gce-c3-capacity.yml` and [formal experiment
    - **Windows execution**: `scripts/bench/gce_cleanup.py` must use `shutil.which('gcloud')` to resolve `gcloud.cmd` on Windows shells to prevent `[WinError 2]`.
    - For an end-to-end command, wrap it with `gce_cleanup.py ... --after COMMAND ...` so the stop is attempted in `finally` after download and report review. If the controlling process dies, inspect VM states manually and retry the stop. Stopped SSDs continue to incur charges. Once artifacts are secure and the environment will not be reused, review `terraform destroy` for the same state/tfvars and remove only resources owned by the module; retain the existing VPC/NAT.
 
+### Automated Unmanned Orchestration & Disk Lifecycle Wrapper
+To execute the full lifecycle in a single command from the operator machine:
+```bash
+python scripts/bench/run_gce_suite.py --project PROJECT_ID --zone ZONE --run-id RUN_ID
+```
+This orchestrator automatically:
+1. Verifies/starts both VMs (`bench-app-c3`, `bench-loadgen-c3`) and discovers private IPs
+2. Runs container build and strict preflight validation
+3. Executes the full benchmark run and generates reports
+4. Downloads all raw artifacts via SCP through IAP
+5. Computes and verifies SHA-256 checksums, creating `SHA256SUMS`
+6. Guarantees both VMs are stopped (`TERMINATED`) in a `finally` block
+7. Displays persistent disk cost warnings and provides safe `terraform destroy` guidance (or `--auto-destroy` if authorized).
+
 If a separate `gce-benchmark-runner` automation script becomes available, inspect its current implementation before using it: require the two VM names, exact source SHA, complete local artifact recovery, independent stop/verification of **both** VMs, and an explicit disk lifecycle. Its earlier one-VM defaults must not override this runbook.
