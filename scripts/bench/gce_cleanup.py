@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import time
+import shutil
 from pathlib import Path
 
 
@@ -19,7 +20,8 @@ INSTANCES = ('bench-app-c3', 'bench-loadgen-c3')
 
 
 def gcloud(*args):
-    return subprocess.run(['gcloud', 'compute', 'instances', *args],
+    exe = shutil.which('gcloud') or 'gcloud'
+    return subprocess.run([exe, 'compute', 'instances', *args],
                           text=True, capture_output=True, timeout=120, check=True).stdout.strip()
 
 

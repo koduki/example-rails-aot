@@ -18,17 +18,17 @@ PAIRS = [('emit-cruby-off', 'rails-cruby-off'),
 
 def generate(root):
     root = Path(root)
-    plan = json.loads((root / 'plan.json').read_text())
+    plan = json.loads((root / 'plan.json').read_text(encoding='utf-8'))
     profile = plan['profile']
     if not profile.get('capacity_search'):
         raise ValueError('This report requires a capacity profile')
-    rows = json.loads((root / 'trials/per-run.json').read_text())
-    checks = json.loads((root / 'preflight/preflight.json').read_text())
-    env = json.loads((root / 'env.json').read_text())
+    rows = json.loads((root / 'trials/per-run.json').read_text(encoding='utf-8'))
+    checks = json.loads((root / 'preflight/preflight.json').read_text(encoding='utf-8'))
+    env = json.loads((root / 'env.json').read_text(encoding='utf-8'))
     pairs = {f'{a}/{b}': paired_ratios(rows, a, b) for a, b in PAIRS}
     source = {'schema_version': 1, 'commit': env['git_commit'], 'profile': profile,
               'environment': env, 'checks': checks, 'trials': rows, 'paired': pairs}
-    (root / 'gce-summary.json').write_text(json.dumps(source, indent=2, ensure_ascii=False) + '\n')
+    (root / 'gce-summary.json').write_text(json.dumps(source, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
     lines = ['# GCE c3-standard-4 × 2 Benchmark Report', '',
              '## Executive Summary', '',
              'Only confirmed per-repetition sustainable capacity is eligible for comparison.',
@@ -52,7 +52,8 @@ def generate(root):
              '| Target | Page eligible | Preflight |', '| --- | --- | --- |']
     for target in profile['targets']:
         c = checks.get(target, {})
-        lines.append(f'| `{target}` | {profile["endpoints"][0] in c.get("eligible_endpoints", [])} | {c.get("status", "missing")} |')
+        status = c.get('status') or ('passed' if c.get('complete') else ('eligible' if profile['endpoints'][0] in c.get('eligible_endpoints', []) else 'missing'))
+        lines.append(f'| `{target}` | {profile["endpoints"][0] in c.get("eligible_endpoints", [])} | {status} |')
     lines += ['', '## Primary capacity and latency', '',
               '| Target | Confirmed reps | Median sustainable RPS | Worst p99 ms | Worst error % | Mean app CPU % | Peak memory MB | Warmup s range |',
               '| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |']
@@ -90,5 +91,5 @@ def generate(root):
               'SQLite single-writer contention remains even when CRUD writes use different article IDs. Hosted Actions smoke observations are excluded from this report.', '',
               '## Raw artifact provenance', '',
               '`plan.json`, `env.json`, `preflight/`, `trials/per-run.json`, each trial’s `capacity-search.json`, `telemetry.json`, remote k6 and tester artifacts, and `gce-summary.json` support recalculation.']
-    (root / 'gce-summary.md').write_text('\n'.join(lines) + '\n')
+    (root / 'gce-summary.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
     return source

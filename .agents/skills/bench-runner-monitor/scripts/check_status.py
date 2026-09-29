@@ -11,6 +11,7 @@ import argparse
 import base64
 import datetime
 import glob
+import gzip
 import json
 import os
 import shutil
@@ -172,29 +173,51 @@ def inspect():
         first_mtime = None
         latest_mtime = None
 
-        for td in all_entries:
-            tfile = os.path.join(td, "trial.json")
-            if os.path.exists(tfile):
-                try:
-                    with open(tfile, "r") as f:
-                        tdata = json.load(f)
-                    status = tdata.get("status", "unknown")
-                    status_counts[status] = status_counts.get(status, 0) + 1
-                    mtime = os.path.getmtime(tfile)
-                    if first_mtime is None or mtime < first_mtime:
-                        first_mtime = mtime
-                    if latest_mtime is None or mtime > latest_mtime:
-                        latest_mtime = mtime
-                    completed_trials.append({
-                        "name": os.path.basename(td),
-                        "target": tdata.get("target"),
-                        "endpoint": tdata.get("endpoint"),
-                        "status": status,
-                        "warmup_seconds": tdata.get("warmup_seconds"),
-                        "mtime": mtime
-                    })
-                except Exception:
-                    pass
+        per_run_file = os.path.join(trials_dir, "per-run.json")
+        if os.path.exists(per_run_file):
+            try:
+                with open(per_run_file, "r") as f:
+                    prows = json.load(f)
+                for idx, r in enumerate(prows):
+                    st = r.get("status", "unknown")
+                    if st not in ("pending", "not_run"):
+                        status_counts[st] = status_counts.get(st, 0) + 1
+                        td_name = os.path.basename(all_entries[idx]) if idx < len(all_entries) else f"{idx:04d}-{r.get('target')}"
+                        completed_trials.append({
+                            "name": td_name,
+                            "target": r.get("target"),
+                            "endpoint": r.get("endpoint"),
+                            "status": st,
+                            "warmup_seconds": r.get("warmup_seconds"),
+                            "reason": r.get("reason")
+                        })
+            except Exception:
+                pass
+
+        if not completed_trials:
+            for td in all_entries:
+                tfile = os.path.join(td, "trial.json")
+                if os.path.exists(tfile):
+                    try:
+                        with open(tfile, "r") as f:
+                            tdata = json.load(f)
+                        status = tdata.get("status", "unknown")
+                        status_counts[status] = status_counts.get(status, 0) + 1
+                        mtime = os.path.getmtime(tfile)
+                        if first_mtime is None or mtime < first_mtime:
+                            first_mtime = mtime
+                        if latest_mtime is None or mtime > latest_mtime:
+                            latest_mtime = mtime
+                        completed_trials.append({
+                            "name": os.path.basename(td),
+                            "target": tdata.get("target"),
+                            "endpoint": tdata.get("endpoint"),
+                            "status": status,
+                            "warmup_seconds": tdata.get("warmup_seconds"),
+                            "mtime": mtime
+                        })
+                    except Exception:
+                        pass
 
         curr_trial = None
         if len(all_entries) > len(completed_trials):
@@ -277,29 +300,51 @@ def collect_local(results_dir: Optional[str] = None) -> Dict[str, Any]:
         first_mtime = None
         latest_mtime = None
 
-        for td in all_entries:
-            tfile = td / "trial.json"
-            if tfile.exists():
-                try:
-                    with open(tfile, "r", encoding="utf-8") as f:
-                        tdata = json.load(f)
-                    status = tdata.get("status", "unknown")
-                    status_counts[status] = status_counts.get(status, 0) + 1
-                    mtime = tfile.stat().st_mtime
-                    if first_mtime is None or mtime < first_mtime:
-                        first_mtime = mtime
-                    if latest_mtime is None or mtime > latest_mtime:
-                        latest_mtime = mtime
-                    completed_trials.append({
-                        "name": td.name,
-                        "target": tdata.get("target"),
-                        "endpoint": tdata.get("endpoint"),
-                        "status": status,
-                        "warmup_seconds": tdata.get("warmup_seconds"),
-                        "mtime": mtime,
-                    })
-                except Exception:
-                    pass
+        per_run_file = trials_dir / "per-run.json"
+        if per_run_file.exists():
+            try:
+                with open(per_run_file, "r", encoding="utf-8") as f:
+                    prows = json.load(f)
+                for idx, r in enumerate(prows):
+                    st = r.get("status", "unknown")
+                    if st not in ("pending", "not_run"):
+                        status_counts[st] = status_counts.get(st, 0) + 1
+                        td_name = all_entries[idx].name if idx < len(all_entries) else f"{idx:04d}-{r.get('target')}"
+                        completed_trials.append({
+                            "name": td_name,
+                            "target": r.get("target"),
+                            "endpoint": r.get("endpoint"),
+                            "status": st,
+                            "warmup_seconds": r.get("warmup_seconds"),
+                            "reason": r.get("reason"),
+                        })
+            except Exception:
+                pass
+
+        if not completed_trials:
+            for td in all_entries:
+                tfile = td / "trial.json"
+                if tfile.exists():
+                    try:
+                        with open(tfile, "r", encoding="utf-8") as f:
+                            tdata = json.load(f)
+                        status = tdata.get("status", "unknown")
+                        status_counts[status] = status_counts.get(status, 0) + 1
+                        mtime = tfile.stat().st_mtime
+                        if first_mtime is None or mtime < first_mtime:
+                            first_mtime = mtime
+                        if latest_mtime is None or mtime > latest_mtime:
+                            latest_mtime = mtime
+                        completed_trials.append({
+                            "name": td.name,
+                            "target": tdata.get("target"),
+                            "endpoint": tdata.get("endpoint"),
+                            "status": status,
+                            "warmup_seconds": tdata.get("warmup_seconds"),
+                            "mtime": mtime,
+                        })
+                    except Exception:
+                        pass
 
         curr_trial = all_entries[-1].name if len(all_entries) > len(completed_trials) else None
 
@@ -328,8 +373,9 @@ def collect_local(results_dir: Optional[str] = None) -> Dict[str, Any]:
 
 
 def collect_gce(instance: str, zone: str, project: str) -> Dict[str, Any]:
-    b64_code = base64.b64encode(REMOTE_INSPECTOR_CODE.encode("utf-8")).decode("ascii")
-    remote_cmd = f"python3 -c \"import base64; exec(base64.b64decode('{b64_code}').decode('utf-8'))\""
+    compressed = gzip.compress(REMOTE_INSPECTOR_CODE.encode("utf-8"))
+    b64_code = base64.b64encode(compressed).decode("ascii")
+    remote_cmd = f"python3 -c \"import base64,gzip;exec(gzip.decompress(base64.b64decode('{b64_code}')).decode('utf-8'))\""
 
     gcloud_bin = shutil.which("gcloud.cmd") or shutil.which("gcloud") or "gcloud"
     cmd = [
