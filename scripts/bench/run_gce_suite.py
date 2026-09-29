@@ -211,6 +211,17 @@ def run_suite(args):
         remote_repo = f"/home/{args.ssh_user}/example-rails-aot" if args.ssh_user else "$HOME/example-rails-aot"
         remote_output = f"bench-results/{run_id}"
 
+        # Step 1.5: Sync git repository on app VM
+        print(f"      Syncing latest code on {app_vm}...", flush=True)
+        sync_cmd = (
+            f"if [ -d \"{remote_repo}/.git\" ]; then "
+            f"  cd \"{remote_repo}\" && git fetch origin && git checkout main && git pull --ff-only origin main; "
+            f"else "
+            f"  git clone https://github.com/koduki/example-rails-aot.git \"{remote_repo}\" && cd \"{remote_repo}\" && git checkout main; "
+            f"fi"
+        )
+        ssh_command(app_vm, project, zone, sync_cmd, timeout=300)
+
         # Step 2: Build container images if requested
         if not args.skip_build:
             print(f"[2/6] Building containers on {app_vm}...", flush=True)
