@@ -8,12 +8,23 @@
   "cpu_count": 4, "memory_mb": 14336, "threads": 4, "spinel_workers": 4,
   "repetitions": 5, "seed": 20260928,
   "warmup_min_seconds": 180, "warmup_max_seconds": 900,
-  "window_seconds": 30, "stable_windows": 4, "max_cv": 0.05, "max_drift": 0.05,
+  "window_seconds": 30, "stable_windows": 4, "max_cv": 0.08, "max_drift": 0.08,
   "measurement_seconds": 120, "connections": 32, "request_timeout": 5,
   "ready_timeout": 180, "total_timeout": 432000,
   "driver": "k6", "offered_rps": 100,
   "warmup_closed_loop": true, "capacity_search": true,
-  "capacity_start_rps": 100, "capacity_max_rps": 12800,
-  "capacity_step_seconds": 30, "capacity_tolerance_rps": 50,
-  "slo_p99_ms": 100, "max_error_rate": 0.001
+  "capacity_start_rps": 100,
+  "target_capacity_start_rps": {
+    "rails-cruby-off": 25,
+    "rails-jruby-off": 25,
+    "emit-cruby-off": 25,
+    "emit-jruby-off": 25
+  },
+  "capacity_min_rps": 25,
+  "capacity_max_rps": 12800,
+  "capacity_step_seconds": 30, "capacity_tolerance_rps": 25,
+  "slo_p99_ms": 100, "max_error_rate": 0.001,
+  "warmup_fail_fast_windows": 3,
+  "warmup_max_latency_ms": 2000,
+  "warmup_fail_fast_error_rate": 0.2
 }

@@ -53,6 +53,34 @@ class CapacityTests(unittest.TestCase):
         outcome = capacity.search(lambda rate, duration, phase: self.result(rate, p99=150 if phase == 'confirm' or rate >= 200 else 20), self.profile)
         self.assertIsNone(outcome['capacity_rps'])
 
+    def test_downward_search_recovers_when_start_rate_exceeds_slo(self):
+        profile = dict(self.profile, capacity_start_rps=100, capacity_min_rps=25, capacity_tolerance_rps=25)
+        def measure(rate, duration, phase):
+            return self.result(rate, p99=150 if rate > 25 else 20)
+        result = capacity.search(measure, profile)
+        self.assertEqual(result['status'], 'pass')
+        self.assertEqual(result['capacity_rps'], 25)
+        phases = [s['phase'] for s in result['steps']]
+        self.assertIn('downward', phases)
+        self.assertEqual(phases[-1], 'confirm')
+
+    def test_downward_search_recovers_when_start_rate_causes_client_saturation(self):
+        profile = dict(self.profile, capacity_start_rps=100, capacity_min_rps=25, capacity_tolerance_rps=25)
+        def measure(rate, duration, phase):
+            if rate == 100:
+                return self.result(rate, client_saturated=True, iterations_dropped=10)
+            return self.result(rate, p99=120 if rate >= 50 else 20)
+        result = capacity.search(measure, profile)
+        self.assertEqual(result['status'], 'pass')
+        self.assertEqual(result['capacity_rps'], 25)
+
+    def test_downward_search_fails_when_even_min_rps_fails(self):
+        profile = dict(self.profile, capacity_start_rps=100, capacity_min_rps=25)
+        def measure(rate, duration, phase):
+            return self.result(rate, p99=500)
+        with self.assertRaisesRegex(RuntimeError, 'No sustainable starting rate'):
+            capacity.search(measure, profile)
+
     def test_paired_repetitions_exclude_incomplete(self):
         rows = [{'target': t, 'repetition': rep, 'status': 'passed', 'capacity_rps': val}
                 for rep, (a, b) in enumerate(((200, 100), (150, 100), (400, 200)), 1)
@@ -82,13 +110,13 @@ class CapacityTests(unittest.TestCase):
                     for i in range(1, 6)]
             (root / 'trials/per-run.json').write_text(json.dumps(rows))
             gce_report.generate(root)
-            report = (root / 'gce-summary.md').read_text()
+            report = (root / 'gce-summary.md').read_text(encoding='utf-8')
             self.assertIn('90.00', report)  # Worst repetition, not median p99.
             self.assertIn('103.00', report)  # Median sustainable RPS.
             rows[-1]['status'] = 'failed'
             (root / 'trials/per-run.json').write_text(json.dumps(rows))
             gce_report.generate(root)
-            self.assertIn('4/5 | —', (root / 'gce-summary.md').read_text())
+            self.assertIn('4/5 | —', (root / 'gce-summary.md').read_text(encoding='utf-8'))
 
     def test_tester_network_errors_are_rejected(self):
         raw = 'eth0: 10 2 1 1 0 0 0 0 10 2 3 4 0 0 0 0'

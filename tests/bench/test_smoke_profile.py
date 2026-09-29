@@ -30,26 +30,38 @@ class SmokeProfileTests(unittest.TestCase):
             prepare(path, count=100)
             original = snapshot(path)
             initial_sequence = run.article_sequence(path)
-            with sqlite3.connect(path) as db:
+            db = sqlite3.connect(path)
+            try:
                 db.execute('UPDATE articles SET title=?, body=? WHERE id=1',
                            ('Article 1 (iteration 0)',
                             'Updated body for article 1 at iteration 0. Preserves bounded storage.'))
+                db.commit()
+            finally:
+                db.close()
             changed = snapshot(path)
             measurement = {'iterations_completed': 1,
                            'operations': {'total': 1, 'successful': 1, 'writes': 1}}
             self.assertEqual(run.verify_crud_state(original, changed, initial_sequence,
                              run.article_sequence(path), measurement, 'mix', 100)['updated_articles'], 1)
-            with sqlite3.connect(path) as db:
+            db = sqlite3.connect(path)
+            try:
                 db.execute('UPDATE articles SET body=? WHERE id=1', ('unexpected',))
+                db.commit()
+            finally:
+                db.close()
             with self.assertRaisesRegex(ValueError, 'not persisted'):
                 run.verify_crud_state(original, snapshot(path), initial_sequence,
                                       run.article_sequence(path), measurement, 'mix', 100)
 
-            with sqlite3.connect(path) as db:
+            db = sqlite3.connect(path)
+            try:
                 db.execute('INSERT INTO articles (title,body,created_at,updated_at) VALUES (?,?,?,?)',
                            ('temp', 'body', '2025-01-01', '2025-01-01'))
                 created_id = db.execute('SELECT last_insert_rowid()').fetchone()[0]
                 db.execute('DELETE FROM articles WHERE id=?', (created_id,))
+                db.commit()
+            finally:
+                db.close()
             self.assertEqual(run.verify_crud_state(snapshot(path), snapshot(path),
                              initial_sequence, run.article_sequence(path), measurement,
                              'create_delete', 100)['created_and_deleted'], 1)

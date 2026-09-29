@@ -23,18 +23,23 @@ def decision(measurement, profile):
 def search(measure, profile):
     """measure(rate, duration, phase) -> k6 summary. Confirm the final candidate."""
     steps = []
+    min_rps = profile.get('capacity_min_rps')
+    start_rps = profile['capacity_start_rps']
+
     def probe(rate, duration, phase):
         m = measure(rate, duration, phase)
         state = decision(m, profile)
         steps.append({'phase': phase, 'rate': rate, 'decision': state, 'measurement': m})
         if state == 'invalid_client':
+            if phase == 'coarse' and rate == start_rps and min_rps and min_rps < rate:
+                return state
             raise RuntimeError(f'Client saturation at {rate} RPS invalidates capacity search')
         return state
     low, high = 0, None
-    rate = profile['capacity_start_rps']
+    rate = start_rps
     while rate <= profile['capacity_max_rps']:
         state = probe(rate, profile['capacity_step_seconds'], 'coarse')
-        if state == 'slo_fail':
+        if state in ('slo_fail', 'invalid_client'):
             high = rate
             break
         low = rate
@@ -45,6 +50,20 @@ def search(measure, profile):
             high = cap
         else:
             low = cap
+    if low == 0 and min_rps and min_rps < start_rps:
+        down_rate = start_rps // 2
+        while down_rate >= min_rps:
+            state = probe(down_rate, profile['capacity_step_seconds'], 'downward')
+            if state == 'pass':
+                low = down_rate
+                break
+            elif state in ('slo_fail', 'invalid_client'):
+                high = down_rate
+                if state == 'invalid_client' and down_rate <= min_rps:
+                    raise RuntimeError(f'Client saturation at {down_rate} RPS invalidates capacity search')
+                down_rate //= 2
+            else:
+                break
     if low == 0:
         raise RuntimeError('No sustainable starting rate; lower capacity_start_rps')
     if high is not None:

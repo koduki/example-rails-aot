@@ -175,3 +175,179 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(result['eligible_common_reads'],['/articles'])
             self.assertEqual(result['trial_status_counts'],{'excluded':1})
             self.assertNotIn('rps',json.dumps(result))
+
+    def test_warmup_unrecoverable_early_exit_on_client_saturation(self):
+        p = {'warmup_fail_fast_windows': 3}
+        windows = [
+            {'client_saturated': True, 'iterations_dropped': 5, 'p95_ms': 50, 'requests_total': 100, 'requests_failed': 0},
+            {'client_saturated': True, 'iterations_dropped': 8, 'p95_ms': 60, 'requests_total': 100, 'requests_failed': 0},
+            {'client_saturated': True, 'iterations_dropped': 12, 'p95_ms': 70, 'requests_total': 100, 'requests_failed': 0},
+        ]
+        aborted, reason = run.warmup_unrecoverable(windows, p)
+        self.assertTrue(aborted)
+        self.assertIn('client saturated', reason)
+
+    def test_warmup_unrecoverable_early_exit_on_high_error_rate(self):
+        p = {'warmup_fail_fast_windows': 3, 'warmup_fail_fast_error_rate': 0.2}
+        windows = [
+            {'requests_total': 100, 'requests_failed': 30, 'p95_ms': 50},
+            {'requests_total': 100, 'requests_failed': 40, 'p95_ms': 60},
+            {'requests_total': 100, 'requests_failed': 50, 'p95_ms': 70},
+        ]
+        aborted, reason = run.warmup_unrecoverable(windows, p)
+        self.assertTrue(aborted)
+        self.assertIn('error rate exceeded', reason)
+
+    def test_warmup_unrecoverable_early_exit_on_high_latency(self):
+        p = {'warmup_fail_fast_windows': 3, 'warmup_max_latency_ms': 1000.0}
+        windows = [
+            {'requests_total': 100, 'requests_failed': 0, 'p95_ms': 1500.0},
+            {'requests_total': 100, 'requests_failed': 0, 'p95_ms': 2200.0},
+            {'requests_total': 100, 'requests_failed': 0, 'p95_ms': 3000.0},
+        ]
+        aborted, reason = run.warmup_unrecoverable(windows, p)
+        self.assertTrue(aborted)
+        self.assertIn('latency exceeded', reason)
+
+    def test_warmup_unrecoverable_does_not_abort_when_healthy(self):
+        p = {'warmup_fail_fast_windows': 3, 'warmup_max_latency_ms': 1000.0, 'warmup_fail_fast_error_rate': 0.2}
+        windows = [
+            {'requests_total': 100, 'requests_failed': 0, 'p95_ms': 20.0},
+            {'requests_total': 100, 'requests_failed': 0, 'p95_ms': 25.0},
+            {'requests_total': 100, 'requests_failed': 0, 'p95_ms': 22.0},
+        ]
+        aborted, reason = run.warmup_unrecoverable(windows, p)
+        self.assertFalse(aborted)
+        self.assertIsNone(reason)
+
+    def test_stable_respects_target_specific_max_cv_and_drift(self):
+        windows = [
+            {'rps': 100.0, 'p95_ms': 20.0, 'errors': 0, 'requests_total': 100},
+            {'rps': 115.0, 'p95_ms': 20.0, 'errors': 0, 'requests_total': 100},
+            {'rps': 100.0, 'p95_ms': 20.0, 'errors': 0, 'requests_total': 100},
+            {'rps': 115.0, 'p95_ms': 20.0, 'errors': 0, 'requests_total': 100},
+        ]
+        p_strict = {'stable_windows': 4, 'max_cv': 0.05, 'max_drift': 0.05, 'warmup_max_error_rate': 0}
+        self.assertFalse(run.stable(windows, p_strict, target='spinel'))
+
+        p_target = {'stable_windows': 4, 'max_cv': 0.05, 'max_drift': 0.08, 'warmup_max_error_rate': 0,
+                    'target_max_cv': {'spinel': 0.08}}
+        self.assertTrue(run.stable(windows, p_target, target='spinel'))
+        self.assertFalse(run.stable(windows, p_target, target='rails-cruby-off'))
+
+    def test_config_validates_adaptive_warmup_and_capacity_settings(self):
+        base = run.config(ROOT / 'bench/profiles/quick.yml')
+        good = dict(base, target_capacity_start_rps={'rails-cruby-off': 25},
+                    capacity_min_rps=25, target_max_cv={'spinel': 0.08},
+                    warmup_fail_fast_windows=3, warmup_max_latency_ms=2000.0,
+                    warmup_fail_fast_error_rate=0.2)
+        self.assertIsInstance(run.config(good), dict)
+
+        bad_target_rps = dict(base, target_capacity_start_rps={'rails-cruby-off': -5})
+        with self.assertRaises(ValueError):
+            run.config(bad_target_rps)
+
+        bad_cv = dict(base, target_max_cv={'spinel': 1.5})
+        with self.assertRaises(ValueError):
+            run.config(bad_cv)
+
+        bad_fail_fast = dict(base, warmup_fail_fast_windows=0)
+        with self.assertRaises(ValueError):
+            run.config(bad_fail_fast)
+
+    def test_cli_and_env_override_capacity_and_warmup_settings(self):
+        from unittest.mock import patch
+        import io
+        cmd = [
+            'run.py', 'run', '--dry-run',
+            '--capacity-start-rps', '50',
+            '--capacity-min-rps', '20',
+            '--target-capacity-start-rps', 'rails-cruby-off=25,spinel=200',
+            '--max-cv', '0.08',
+            '--max-drift', '0.09',
+            '--warmup-fail-fast-windows', '4',
+            '--warmup-max-latency-ms', '1500',
+        ]
+        with patch.object(sys, 'argv', cmd), patch('sys.stdout', new_callable=io.StringIO) as out:
+            ret = run.main()
+            self.assertEqual(ret, 0)
+            plan = json.loads(out.getvalue())
+            p = plan['profile']
+            self.assertEqual(p['capacity_start_rps'], 50)
+            self.assertEqual(p['capacity_min_rps'], 20)
+            self.assertEqual(p['target_capacity_start_rps'], {'rails-cruby-off': 25, 'spinel': 200})
+            self.assertEqual(p['max_cv'], 0.08)
+            self.assertEqual(p['max_drift'], 0.09)
+            self.assertEqual(p['warmup_fail_fast_windows'], 4)
+            self.assertEqual(p['warmup_max_latency_ms'], 1500.0)
+
+    def test_trials_early_abort_skips_measurement_and_marks_unstable(self):
+        from unittest.mock import patch, MagicMock
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d)
+            p = dict(run.config(ROOT / 'bench/profiles/quick.yml'),
+                     repetitions=1, targets=['rails-cruby-off'], endpoints=['/articles'],
+                     warmup_min_seconds=30, warmup_max_seconds=300, window_seconds=10,
+                     warmup_fail_fast_windows=3, warmup_max_latency_ms=1000.0)
+            cpus = {'app': [0], 'client': [1], 'allowed': [0, 1]}
+            checks = {'rails-cruby-off': {'eligible_endpoints': ['/articles']}}
+
+            # Mock sample to return latency > 1000ms
+            unhealthy_window = {
+                'elapsed': 10.0, 'rps': 10.0, 'p95_ms': 2500.0, 'requests_total': 100,
+                'requests_successful': 100, 'requests_failed': 0, 'iterations_dropped': 0,
+                'client_saturated': False, 'latency_ms': {'p95': 2500.0, 'p99': 3000.0}
+            }
+            mock_server = MagicMock()
+            mock_server.url = 'http://127.0.0.1:3000'
+            mock_server.database = output / 'fake.db'
+            mock_server.__enter__.return_value = mock_server
+            mock_server.get_diagnostics.return_value = None
+
+            with patch.object(run, 'Server', return_value=mock_server), \
+                 patch.object(run, 'sample', return_value=unhealthy_window) as mock_sample:
+                rows = run.trials(p, cpus, output, checks)
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]['status'], 'unstable')
+                self.assertIn('latency exceeded', rows[0]['reason'])
+                # Only warmup windows sampled, no measurement step
+                self.assertNotIn('measurement', rows[0])
+                # Warmup ran exactly 3 windows (30s >= warmup_min_seconds 30s)
+                self.assertEqual(rows[0]['warmup_seconds'], 30.0)
+
+    def test_trials_passes_target_specific_start_rps_to_capacity_search(self):
+        from unittest.mock import patch, MagicMock
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d)
+            p = dict(run.config(ROOT / 'bench/profiles/quick.yml'),
+                     repetitions=1, targets=['rails-cruby-off'], endpoints=['/articles'],
+                     warmup_min_seconds=10, warmup_max_seconds=60, window_seconds=10,
+                     capacity_search=True, capacity_start_rps=100,
+                     target_capacity_start_rps={'rails-cruby-off': 25})
+            cpus = {'app': [0], 'client': [1], 'allowed': [0, 1]}
+            checks = {'rails-cruby-off': {'eligible_endpoints': ['/articles']}}
+
+            clean_window = {
+                'elapsed': 10.0, 'rps': 100.0, 'p95_ms': 20.0, 'requests_total': 1000,
+                'requests_successful': 1000, 'requests_failed': 0, 'iterations_dropped': 0,
+                'client_saturated': False, 'latency_ms': {'p95': 20.0, 'p99': 25.0}
+            }
+            mock_server = MagicMock()
+            mock_server.url = 'http://127.0.0.1:3000'
+            mock_server.name = 'rails-cruby-off'
+            mock_server.__enter__.return_value = mock_server
+            mock_server.get_diagnostics.return_value = None
+
+            search_profile_received = []
+            def fake_search(measure, profile):
+                search_profile_received.append(dict(profile))
+                return {'offered_rps': 25, 'capacity_rps': 25, 'measurement': clean_window, 'status': 'pass'}
+
+            with patch.object(run, 'Server', return_value=mock_server), \
+                 patch.object(run, 'sample', return_value=clean_window), \
+                 patch.object(run, 'stable', return_value=True), \
+                 patch.object(run.capacity, 'search', side_effect=fake_search):
+                rows = run.trials(p, cpus, output, checks)
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(len(search_profile_received), 1)
+                self.assertEqual(search_profile_received[0]['capacity_start_rps'], 25)

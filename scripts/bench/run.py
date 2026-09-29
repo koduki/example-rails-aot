@@ -2,6 +2,7 @@
 """Portable P0 build / preflight / lifecycle runner. JSON is used as a YAML subset."""
 import argparse
 import contextlib
+import copy
 import hashlib
 import json
 import os
@@ -61,8 +62,8 @@ def command(args, timeout=300, log=None, check=True):
         raise RuntimeError(f'{args[0]} exited {result.returncode}: {result.stdout[-4000:]}')
     return result.stdout.strip()
 
-def config(path):
-    p = json.loads(Path(path).read_text())
+def config(path_or_dict):
+    p = copy.deepcopy(path_or_dict) if isinstance(path_or_dict, dict) else json.loads(Path(path_or_dict).read_text(encoding='utf-8'))
     for key in ('cpu_count','memory_mb','threads','spinel_workers','repetitions','window_seconds',
                 'warmup_min_seconds','warmup_max_seconds','stable_windows','measurement_seconds',
                 'connections','request_timeout','ready_timeout','total_timeout'):
@@ -96,6 +97,30 @@ def config(path):
         for key in ('capacity_start_rps', 'capacity_max_rps', 'capacity_step_seconds', 'capacity_tolerance_rps', 'slo_p99_ms'):
             if p.get(key, 0) <= 0:
                 raise ValueError('Invalid capacity setting: ' + key)
+    if 'target_capacity_start_rps' in p:
+        if not isinstance(p['target_capacity_start_rps'], dict) or any(
+                not isinstance(v, (int, float)) or v <= 0 for v in p['target_capacity_start_rps'].values()):
+            raise ValueError('target_capacity_start_rps must be a mapping of target to positive RPS')
+    if 'target_max_cv' in p:
+        if not isinstance(p['target_max_cv'], dict) or any(
+                not isinstance(v, (int, float)) or not 0 < v < 1 for v in p['target_max_cv'].values()):
+            raise ValueError('target_max_cv must be a mapping of target to float in (0, 1)')
+    if 'target_max_drift' in p:
+        if not isinstance(p['target_max_drift'], dict) or any(
+                not isinstance(v, (int, float)) or not 0 < v < 1 for v in p['target_max_drift'].values()):
+            raise ValueError('target_max_drift must be a mapping of target to float in (0, 1)')
+    if 'capacity_min_rps' in p:
+        if not isinstance(p['capacity_min_rps'], (int, float)) or p['capacity_min_rps'] <= 0:
+            raise ValueError('capacity_min_rps must be a positive number')
+    if 'warmup_fail_fast_windows' in p:
+        if not isinstance(p['warmup_fail_fast_windows'], int) or p['warmup_fail_fast_windows'] < 1:
+            raise ValueError('warmup_fail_fast_windows must be an integer >= 1')
+    if 'warmup_max_latency_ms' in p:
+        if not isinstance(p['warmup_max_latency_ms'], (int, float)) or p['warmup_max_latency_ms'] <= 0:
+            raise ValueError('warmup_max_latency_ms must be positive')
+    if 'warmup_fail_fast_error_rate' in p:
+        if not isinstance(p['warmup_fail_fast_error_rate'], (int, float)) or not 0 < p['warmup_fail_fast_error_rate'] <= 1:
+            raise ValueError('warmup_fail_fast_error_rate must be in (0, 1]')
     minimum = len(p['targets'] ) * len(p['endpoints']) * p['repetitions'] * (
         p['warmup_min_seconds'] + p['measurement_seconds'])
     if p['total_timeout'] < minimum:
@@ -138,7 +163,41 @@ def cpuset(value):
         else: raise ValueError('Invalid cgroup cpuset')
     return ids
 
-def stable(windows, p):
+def warmup_unrecoverable(windows, p):
+    """Detect if warmup is irrecoverably degraded and should exit early.
+    Returns (is_unrecoverable, reason).
+    """
+    fail_fast_windows = p.get('warmup_fail_fast_windows', 3)
+    if len(windows) < fail_fast_windows:
+        return False, None
+    recent = windows[-fail_fast_windows:]
+
+    # 1. Persistent client saturation or dropped iterations
+    if all(w.get('client_saturated', False) or w.get('iterations_dropped', 0) > 0 for w in recent):
+        return True, f'Warmup aborted early: client saturated across {fail_fast_windows} consecutive windows'
+
+    # 2. Persistent high error rate
+    fail_fast_error_rate = p.get('warmup_fail_fast_error_rate', 0.2)
+    def err_rate(w):
+        failed = w.get('requests_failed', w.get('errors', 0))
+        total = w.get('requests_total', w.get('successful', 0) + failed)
+        return (failed / total) if total > 0 else 0.0
+
+    if all(err_rate(w) > fail_fast_error_rate for w in recent):
+        return True, f'Warmup aborted early: error rate exceeded {fail_fast_error_rate:.0%} across {fail_fast_windows} consecutive windows'
+
+    # 3. Persistent latency exceeding threshold
+    slo_p99 = p.get('slo_p99_ms')
+    max_lat = p.get('warmup_max_latency_ms', (slo_p99 * 10) if slo_p99 else 2000.0)
+    def lat_val(w):
+        return w.get('p95_ms') or w.get('latency_ms', {}).get('p95', 0) or 0.0
+
+    if all(lat_val(w) > max_lat for w in recent):
+        return True, f'Warmup aborted early: latency exceeded {max_lat}ms across {fail_fast_windows} consecutive windows'
+
+    return False, None
+
+def stable(windows, p, target=None):
     n = p['stable_windows']
     if len(windows) < n:
         return False
@@ -147,6 +206,8 @@ def stable(windows, p):
            r['errors'] / max(1, r.get('requests_total', r.get('successful', 0) + r['errors'])) >
            p.get('warmup_max_error_rate', 0) for r in rows):
         return False
+    max_cv = (p.get('target_max_cv') or {}).get(target, p['max_cv']) if target else p['max_cv']
+    max_drift = (p.get('target_max_drift') or {}).get(target, p['max_drift']) if target else p['max_drift']
     for key in (('rps', 'p95_ms', 'p99_ms') if p.get('capacity_search') else ('rps', 'p95_ms')):
         values = [r.get(key) or r.get('latency_ms', {}).get(key.removesuffix('_ms').replace('p99', 'p99')) for r in rows]
         if any(v is None or v <= 0 for v in values):
@@ -154,7 +215,7 @@ def stable(windows, p):
         avg = statistics.mean(values)
         half = n // 2
         drift = abs(statistics.mean(values[-half:])-statistics.mean(values[:half])) / avg
-        if statistics.pstdev(values)/avg > p['max_cv'] or drift > p['max_drift']:
+        if statistics.pstdev(values)/avg > max_cv or drift > max_drift:
             return False
     return True
 
@@ -489,9 +550,10 @@ def sample(server, endpoint, duration, p, cpus, directory=None, rate=None, phase
             command(k6_args, timeout=duration + p['request_timeout'] + 30,
                     log=output_dir / 'k6.log')
         else:
+            k6_user = f'{os.getuid()}:{os.getgid()}' if hasattr(os, 'getuid') else '1000:1000'
             k6_args = [
                 'docker', 'run', '--rm',
-                '--user', f'{os.getuid()}:{os.getgid()}',
+                '--user', k6_user,
                 '--cpuset-cpus', client_cpus,
                 '--network', 'host',
                 '-v', f'{script_path.resolve()}:/test_script.js:ro',
@@ -546,6 +608,7 @@ def trials(p, cpus, output, checks):
                     diag_start = server.get_diagnostics() if p.get('diagnostics') else None
                     windows = []; elapsed = 0.0; ready = False
                     verification_only = p.get('verification_only', False)
+                    early_abort_reason = None
                     while elapsed < p['warmup_max_seconds'] and time.monotonic() < deadline:
                         save(directory / 'progress.json', {'target': trial['target'], 'repetition': trial['repetition'], 'phase': 'warmup', 'window': len(windows) + 1})
                         window = sample(server, trial['endpoint'], p['window_seconds'], p, cpus, directory / f'warmup-{len(windows):03d}' if p.get('capacity_search') else directory, phase='warmup')
@@ -556,8 +619,13 @@ def trials(p, cpus, output, checks):
                         # earlier failures in the artifact for audit.
                         if verification_only and elapsed >= p['warmup_min_seconds'] and warmup_valid(windows[-1:]):
                             break
-                        if not verification_only and elapsed >= p['warmup_min_seconds'] and stable(windows, p):
+                        if not verification_only and elapsed >= p['warmup_min_seconds'] and stable(windows, p, target=trial['target']):
                             ready = True; break
+                        if not verification_only and elapsed >= p['warmup_min_seconds']:
+                            aborted, reason = warmup_unrecoverable(windows, p)
+                            if aborted:
+                                early_abort_reason = reason
+                                break
                     row['warmup_seconds'] = elapsed
                     row['warmup_converged'] = None if verification_only else ready
                     if verification_only:
@@ -568,6 +636,8 @@ def trials(p, cpus, output, checks):
                         warmup_clean = warmup_clean and len(snapshot(server.database)['articles']) == p.get('fixture_articles', 3)
                     if verification_only and not warmup_clean:
                         row.update(status='failed', reason='Warmup had failed requests, operations, or dropped iterations')
+                    elif early_abort_reason:
+                        row.update(status='unstable', reason=early_abort_reason)
                     elif not ready and not verification_only and not p.get('allow_unstable'):
                         row.update(status='unstable', reason='No stable window within budget')
                     elif deadline - time.monotonic() < p['measurement_seconds']:
@@ -611,12 +681,16 @@ def trials(p, cpus, output, checks):
                                     save(directory / 'last-step.json', {'phase': phase, 'rate': rate, 'measurement': measured_step})
                                     return measured_step
                                 steps_seen = []
-                                result = capacity.search(measure, p)
-                                save(directory / 'capacity-search.json', result)
-                                row['capacity_rps'] = result['capacity_rps']
-                                row['offered_rps'] = result['offered_rps']
+                                trial_p = dict(p)
+                                target_start = (p.get('target_capacity_start_rps') or {}).get(trial['target'])
+                                if target_start:
+                                    trial_p['capacity_start_rps'] = target_start
+                                capacity_result = capacity.search(measure, trial_p)
+                                save(directory / 'capacity-search.json', capacity_result)
+                                row['capacity_rps'] = capacity_result['capacity_rps']
+                                row['offered_rps'] = capacity_result['offered_rps']
                                 row['capacity_steps'] = steps_seen
-                                measured = result['measurement']
+                                measured = capacity_result['measurement']
                             else:
                                 measured = sample(server, trial['endpoint'], p['measurement_seconds'], p, cpus, directory)
                         finally:
@@ -649,7 +723,7 @@ def trials(p, cpus, output, checks):
                             if scenario == 'mix':
                                 has_errors = has_errors or operations.get('reads', 0) == 0
                         if p.get('capacity_search'):
-                            has_errors = (has_errors or result['status'] != 'pass' or
+                            has_errors = (has_errors or capacity_result['status'] != 'pass' or
                                 telemetry.get('summary', {}).get('sample_count', 0) == 0 or
                                 (telemetry.get('summary', {}).get('throttled_periods_delta') or 0) > 0 or
                                 telemetry.get('summary', {}).get('oom_killed', False))
@@ -697,6 +771,13 @@ def main():
     parser.add_argument('--dry-run',action='store_true', help='Validate configuration and print execution plan without running')
     parser.add_argument('--preflight-file', help='Path to existing preflight.json to reuse')
     parser.add_argument('--seed', type=int, help='Override random seed for scheduling')
+    parser.add_argument('--capacity-start-rps', type=int, help='Override capacity search starting RPS')
+    parser.add_argument('--capacity-min-rps', type=int, help='Override capacity search minimum RPS for downward search')
+    parser.add_argument('--target-capacity-start-rps', help='Comma-separated target=RPS pairs (e.g. rails-cruby-off=25,spinel=100)')
+    parser.add_argument('--max-cv', type=float, help='Override maximum CV threshold for warmup stabilization')
+    parser.add_argument('--max-drift', type=float, help='Override maximum drift threshold for warmup stabilization')
+    parser.add_argument('--warmup-fail-fast-windows', type=int, help='Consecutive unhealthy windows to trigger warmup early abort')
+    parser.add_argument('--warmup-max-latency-ms', type=float, help='Latency threshold (ms) for warmup early abort')
     args = parser.parse_args()
 
     loaded = load_env_file(args.env_file) if args.env_file else {}
@@ -712,6 +793,13 @@ def main():
     port = args.target_port or loaded.get('BENCH_TARGET_PORT') or os.environ.get('BENCH_TARGET_PORT')
     env_memory_mb = loaded.get('BENCH_MEMORY_MB') or os.environ.get('BENCH_MEMORY_MB')
     env_seed = loaded.get('BENCH_SEED') or os.environ.get('BENCH_SEED')
+    env_capacity_start_rps = loaded.get('BENCH_CAPACITY_START_RPS') or os.environ.get('BENCH_CAPACITY_START_RPS')
+    env_capacity_min_rps = loaded.get('BENCH_CAPACITY_MIN_RPS') or os.environ.get('BENCH_CAPACITY_MIN_RPS')
+    env_target_capacity_start_rps = loaded.get('BENCH_TARGET_CAPACITY_START_RPS') or os.environ.get('BENCH_TARGET_CAPACITY_START_RPS')
+    env_max_cv = loaded.get('BENCH_MAX_CV') or os.environ.get('BENCH_MAX_CV')
+    env_max_drift = loaded.get('BENCH_MAX_DRIFT') or os.environ.get('BENCH_MAX_DRIFT')
+    env_fail_fast_windows = loaded.get('BENCH_WARMUP_FAIL_FAST_WINDOWS') or os.environ.get('BENCH_WARMUP_FAIL_FAST_WINDOWS')
+    env_max_latency = loaded.get('BENCH_WARMUP_MAX_LATENCY_MS') or os.environ.get('BENCH_WARMUP_MAX_LATENCY_MS')
 
     output_path = args.output
     if args.output.startswith('bench-results/') and env_output:
@@ -725,6 +813,32 @@ def main():
         profile_path = env_profile
 
     p = config(profile_path)
+    start_rps_val = args.capacity_start_rps or (int(env_capacity_start_rps) if env_capacity_start_rps else None)
+    if start_rps_val:
+        p['capacity_start_rps'] = start_rps_val
+    min_rps_val = args.capacity_min_rps or (int(env_capacity_min_rps) if env_capacity_min_rps else None)
+    if min_rps_val:
+        p['capacity_min_rps'] = min_rps_val
+    target_start_val = args.target_capacity_start_rps or env_target_capacity_start_rps
+    if target_start_val:
+        p_target_starts = p.get('target_capacity_start_rps', {}).copy()
+        for pair in target_start_val.split(','):
+            if '=' in pair:
+                t_name, t_rps = pair.split('=', 1)
+                p_target_starts[t_name.strip()] = int(t_rps.strip())
+        p['target_capacity_start_rps'] = p_target_starts
+    max_cv_val = args.max_cv or (float(env_max_cv) if env_max_cv else None)
+    if max_cv_val:
+        p['max_cv'] = max_cv_val
+    max_drift_val = args.max_drift or (float(env_max_drift) if env_max_drift else None)
+    if max_drift_val:
+        p['max_drift'] = max_drift_val
+    ffw_val = args.warmup_fail_fast_windows or (int(env_fail_fast_windows) if env_fail_fast_windows else None)
+    if ffw_val:
+        p['warmup_fail_fast_windows'] = ffw_val
+    max_lat_val = args.warmup_max_latency_ms or (float(env_max_latency) if env_max_latency else None)
+    if max_lat_val:
+        p['warmup_max_latency_ms'] = max_lat_val
     targets_val = args.targets or env_targets
     if targets_val:
         p['targets'] = select(targets_val.split(','))
