@@ -16,6 +16,7 @@ import shutil
 from pathlib import Path
 
 
+ROOT = Path(__file__).resolve().parents[2]
 INSTANCES = ('bench-app-c3', 'bench-loadgen-c3')
 
 
@@ -67,6 +68,9 @@ def main(argv=None):
     parser.add_argument('--loadgen-instance', default=INSTANCES[1])
     parser.add_argument('--wait-seconds', type=int, default=300)
     parser.add_argument('--status-file', type=Path, help='Local JSON record of both stop results')
+    parser.add_argument('--verify-checksums', type=Path, help='Local artifact directory to compute/verify SHA256SUMS')
+    parser.add_argument('--destroy', action='store_true', help='Execute terraform destroy in infra/terraform after successful stop')
+    parser.add_argument('--terraform-dir', type=Path, default=ROOT / 'infra/terraform', help='Path to infra/terraform')
     parser.add_argument('--after', nargs=argparse.REMAINDER,
                         help='Complete workflow command, including artifact download and report; '
                              'the VMs are stopped in finally')
@@ -103,6 +107,36 @@ def main(argv=None):
         if args.status_file:
             args.status_file.parent.mkdir(parents=True, exist_ok=True)
             args.status_file.write_text(json.dumps(record, indent=2) + '\n')
+
+        # Checksum verification if directory provided
+        if args.verify_checksums:
+            try:
+                import run_gce_suite
+                chk = run_gce_suite.verify_artifact_checksums(args.verify_checksums)
+                print(f"Verified {chk['total_files']} files. Manifest: {chk['manifest_path']}", flush=True)
+            except Exception as e:
+                print(f"Checksum verification failed: {e}", file=sys.stderr)
+                workflow_status = 1
+
+        # Disk cost control reminder and optional destroy
+        all_stopped = all(value['stopped'] for value in outcomes.values())
+        if all_stopped:
+            print(
+                "\n[NOTICE] Both VMs are TERMINATED. SSD persistent disks continue to incur storage fees.\n"
+                f"To destroy disks permanently: cd {args.terraform_dir} && terraform destroy -var-file=terraform.tfvars",
+                flush=True
+            )
+            if args.destroy:
+                tfvars = args.terraform_dir / 'terraform.tfvars'
+                if not tfvars.exists():
+                    print(f"terraform.tfvars not found in {args.terraform_dir}", file=sys.stderr)
+                else:
+                    tf_exe = shutil.which('terraform') or 'terraform'
+                    print("Running automated terraform destroy...", flush=True)
+                    res = subprocess.run([tf_exe, 'destroy', '-var-file=terraform.tfvars', '-auto-approve'],
+                                         cwd=str(args.terraform_dir), check=False)
+                    if res.returncode != 0:
+                        workflow_status = res.returncode
     if not all(value['stopped'] for value in outcomes.values()):
         return 1
     return workflow_status
