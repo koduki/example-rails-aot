@@ -132,7 +132,15 @@ def verify_artifact_checksums(directory):
                 continue
             file_path = Path(root) / file_name
             rel_path = file_path.relative_to(dir_path).as_posix()
-            content = file_path.read_bytes()
+            content = None
+            for attempt in range(5):
+                try:
+                    content = file_path.read_bytes()
+                    break
+                except PermissionError:
+                    time.sleep(0.05)
+            if content is None:
+                content = file_path.read_bytes()
             h = hashlib.sha256(content).hexdigest()
             checksums[rel_path] = h
             total_files += 1
