@@ -213,7 +213,14 @@ def run_suite(args):
         app_ip = get_internal_ip(app_vm, project, zone)
         print(f"      Both VMs RUNNING. App internal IP: {app_ip}", flush=True)
 
-        remote_repo = f"/home/{args.ssh_user}/example-rails-aot" if args.ssh_user else "$HOME/example-rails-aot"
+        if args.ssh_user:
+            remote_repo = f"/home/{args.ssh_user}/example-rails-aot"
+        else:
+            try:
+                remote_home = ssh_command(app_vm, project, zone, 'echo $HOME', timeout=30).splitlines()[-1].strip()
+                remote_repo = f"{remote_home}/example-rails-aot"
+            except Exception:
+                remote_repo = "$HOME/example-rails-aot"
         remote_output = f"bench-results/{run_id}"
 
         # Step 1.5: Sync git repository on app VM
