@@ -267,12 +267,19 @@ def run_suite(args):
             f"--gce-project {project} --gce-zone {zone} {preflight_opt} "
             f"--output {remote_output}"
         )
-        ssh_command(app_vm, project, zone, run_cmd, timeout=args.run_timeout)
+        try:
+            ssh_command(app_vm, project, zone, run_cmd, timeout=args.run_timeout)
+        except RuntimeError as e:
+            # run.py exits with 1 if any trials failed or were unstable, which is normal during capacity exploration.
+            print(f"      Benchmark process completed with non-zero exit code: {e}", flush=True)
 
         # Generate report on remote VM
         print("      Generating formal report on app VM...", flush=True)
         report_cmd = f"cd {remote_repo} && python3 scripts/bench/run.py report --output {remote_output}"
-        ssh_command(app_vm, project, zone, report_cmd, timeout=300)
+        try:
+            ssh_command(app_vm, project, zone, report_cmd, timeout=300)
+        except Exception as e:
+            print(f"      Formal report generation notice: {e}", flush=True)
 
         # Step 5: Download artifacts
         print(f"[5/6] Downloading artifacts from {app_vm}:{remote_output} to {output_dir}...", flush=True)
