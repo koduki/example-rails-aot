@@ -21,7 +21,7 @@ INSTANCES = ('bench-app-c3', 'bench-loadgen-c3')
 
 
 def gcloud(*args):
-    exe = shutil.which('gcloud') or 'gcloud'
+    exe = shutil.which('gcloud.cmd') or shutil.which('gcloud') or 'gcloud'
     return subprocess.run([exe, 'compute', 'instances', *args],
                           text=True, capture_output=True, timeout=120, check=True).stdout.strip()
 

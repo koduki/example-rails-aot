@@ -111,6 +111,43 @@ class RunGceSuiteUnitTests(unittest.TestCase):
                 self.assertEqual(len(stop_called), 1)
                 self.assertEqual(stop_called[0][2], ('bench-app-c3', 'bench-loadgen-c3'))
 
+    def test_resolve_gcloud(self):
+        with patch('shutil.which', side_effect=lambda x: f'/bin/{x}' if x == 'gcloud.cmd' else None):
+            self.assertEqual(run_gce_suite.resolve_gcloud(), '/bin/gcloud.cmd')
+        with patch('shutil.which', side_effect=lambda x: f'/bin/{x}' if x == 'gcloud' else None):
+            self.assertEqual(run_gce_suite.resolve_gcloud(), '/bin/gcloud')
+
+    def test_ssh_command_uses_command_flag(self):
+        captured_cmd = []
+        def mock_run(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            mock_res = MagicMock()
+            mock_res.returncode = 0
+            mock_res.stdout = "output-ok"
+            mock_res.stderr = ""
+            return mock_res
+
+        with patch('subprocess.run', side_effect=mock_run), \
+             patch.object(run_gce_suite, 'resolve_gcloud', return_value='gcloud'):
+            out = run_gce_suite.ssh_command('my-vm', 'proj', 'zone-a', 'echo 123', timeout=60)
+            self.assertEqual(out, "output-ok")
+            self.assertIn('--command=echo 123', captured_cmd)
+            self.assertNotIn('--', captured_cmd)
+
+    def test_ssh_command_raises_on_failure(self):
+        def mock_run(cmd, **kwargs):
+            mock_res = MagicMock()
+            mock_res.returncode = 1
+            mock_res.stdout = ""
+            mock_res.stderr = "permission denied"
+            return mock_res
+
+        with patch('subprocess.run', side_effect=mock_run), \
+             patch.object(run_gce_suite, 'resolve_gcloud', return_value='gcloud'):
+            with self.assertRaises(RuntimeError) as ctx:
+                run_gce_suite.ssh_command('my-vm', 'proj', 'zone-a', 'echo 123')
+            self.assertIn('permission denied', str(ctx.exception))
+
 
 if __name__ == '__main__':
     unittest.main()

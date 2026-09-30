@@ -28,9 +28,14 @@ sys.path.insert(0, str(ROOT / 'scripts/bench'))
 import gce_cleanup
 
 
+def resolve_gcloud():
+    """Resolve gcloud binary across platforms (including Windows .cmd)."""
+    return shutil.which('gcloud.cmd') or shutil.which('gcloud') or 'gcloud'
+
+
 def gcloud_cmd(*args, timeout=120):
     """Execute a gcloud CLI command with cross-platform binary resolution."""
-    exe = shutil.which('gcloud') or 'gcloud'
+    exe = resolve_gcloud()
     cmd = [exe, *args]
     res = subprocess.run(cmd, text=True, capture_output=True, timeout=timeout, check=True)
     return res.stdout.strip()
@@ -75,12 +80,12 @@ def verify_and_start_vms(project, zone, instances=('bench-app-c3', 'bench-loadge
 
 def ssh_command(instance, project, zone, command, timeout=3600):
     """Execute command over SSH via IAP."""
-    exe = shutil.which('gcloud') or 'gcloud'
+    exe = resolve_gcloud()
     cmd = [
         exe, 'compute', 'ssh', instance,
         f'--project={project}', f'--zone={zone}',
         '--tunnel-through-iap',
-        '--', 'bash', '-lc', command
+        f'--command={command}'
     ]
     res = subprocess.run(cmd, text=True, capture_output=True, timeout=timeout)
     if res.returncode != 0:
@@ -90,7 +95,7 @@ def ssh_command(instance, project, zone, command, timeout=3600):
 
 def scp_download(instance, project, zone, remote_path, local_path, retries=3):
     """Download remote directory or file via SCP through IAP with retry."""
-    exe = shutil.which('gcloud') or 'gcloud'
+    exe = resolve_gcloud()
     local_path = Path(local_path)
     local_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
