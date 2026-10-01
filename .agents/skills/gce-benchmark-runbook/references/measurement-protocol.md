@@ -12,11 +12,15 @@ The formal C3 profiles use 1-RPS minimum, 25-RPS initial probe, 5-RPS absolute a
 
 Reject client/network/transport/missing latency evidence without converting it to a server-capacity bound. Direct latency/error/integrity violations establish SLO failure, not a root cause. Dropped iterations alone are incomplete issuance. A repeated boundary reversal is unstable. Preserve all probes, budget failures and final trial state.
 
-After an overload step, the runner executes bounded low-load health probes. `recovery.json` records every attempt, success/failure and `server_queue_drained: null`. No server outstanding-work gauge exists yet. A healthy probe does not certify complete drainage; if it fails, end the trial and restart/rewarm as a separately identified trial. Do not silently retry or splice containers into one repetition.
+After an overload step, the runner executes bounded low-load health probes. `recovery.json` records every attempt, a health decision and a separate `performance_slo_decision`, with `server_queue_drained: null`. Follow-up profiles set health p99 to 2,000 ms while capacity SLO remains 100 ms; the default health deadline derives from request timeout. No server outstanding-work gauge exists yet. A healthy probe does not certify complete drainage; if it fails, end the trial and restart/rewarm as a separately identified trial. Do not silently retry or splice containers into one repetition.
 
 The revised four-VU warmup differs from the September 30 release's 32-VU warmup. Keep cohorts separate. Error-free statistical convergence is required for formal ranking; merely stable failed throughput is not convergence.
 
 ## Diagnostic sweep
+
+Prefer [targeted follow-up instructions](../../../../docs/gce-c3-followup-instructions.md) for the October 1 cohort. `retest_plan.py` prepares bounded main-six matched-rate, split capacity, Spinel pool-control and optional trace experiments. It does not execute without `--execute`; execution requires preflight and all remote flags. Every phase records actual wall time and k6 invocation. Strict fixed-rate profiles require SLO/client integrity and App samples, known zero throttle delta and no OOM. Their successful RPS is rate-limited and never a maximum.
+
+Spinel's control fixes warmup, fresh-container policy and maxVUs while changing preallocatedVUs 10/512 at 10/15/25 RPS. Opt-in socket snapshots cover both cells equally. Retain raw `/proc/net/tcp{,6}` and errors; TCP state/non-listen byte queues are not worker/HTTP queue gauges. The global 4-hour deadline covers six cells; budget failures remain failures. Old diagnostic sweeps below have a different warmup and pool and cannot replace this control.
 
 On the app host, prepare cells without launching them:
 
@@ -34,6 +38,10 @@ Each cell uses a fresh container, three repetitions, one-VU warmup, 120-second m
 Uninstrumented is the default. Use `--instrumented` for a distinct diagnostic cohort; record actual flags and trace overhead. An ordered low/high/low list still uses separate containers and cannot establish in-container recovery. That experiment requires one container, request timestamps and outstanding-work/queue gauges; it remains pending.
 
 ## Stage and trace bundle
+
+Implemented follow-up observation is deliberately opt-in: phase wall time and actual invocation are always recorded, socket sampling is enabled only in the Spinel diagnostic, and JRuby JFR is enabled only for JRuby diagnostic profiles. `BENCH_JFR=1` starts a profile recording capped at 128 MiB/10 minutes, dumps before container removal, and stores `jfr-capture.json` plus the actual `data/bench.jfr`. Verify the recording with a JDK `jfr summary` on a working copy. Missing/failed capture or absent event classes is not evidence of no waits. CRuby trace retains existing YJIT/GC diagnostics. Keep instrumented cohorts out of formal capacity ratios.
+
+The detailed stage/gauge bundle below is still an evidence requirement for causal attribution, not an implemented feature or an already collected result.
 
 Collect SQL start/end, materialization/preload/render timings, allocation/GC deltas, HTTP accept/connection/worker waits and per-request identity. JRuby needs JFR or stack sampling plus compiler/tier/GC events; Spinel needs worker/DB/connection timing. Preserve success and timeout requests. Use CPU and wall-time clocks appropriately and align client/server timestamps. No traced stack or stage timing means no confirmed interpreter, DB or scheduling cause. HTTP minimum is not service time; a hypothetical nested-loop count is not a measured microbenchmark.
 

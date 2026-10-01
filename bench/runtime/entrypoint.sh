@@ -14,6 +14,9 @@ if [[ "$BENCH_RUNTIME" = spinel ]]; then
 elif [[ "$BENCH_RUNTIME" = jruby ]]; then
   case "$BENCH_JIT" in jit) mode=JIT;; off) mode=OFF;; *) exit 2;; esac
   export JRUBY_OPTS="-Xcompile.mode=$mode -J-Xms256m -J-Xmx1024m"
+  if [[ "${BENCH_JFR:-0}" = "1" ]]; then
+    export JRUBY_OPTS="$JRUBY_OPTS -J-XX:StartFlightRecording=name=bench,settings=profile,disk=true,maxsize=128m,maxage=10m"
+  fi
   if [[ "${BENCH_DIAGNOSTICS:-0}" = "1" || "${BENCH_DIAGNOSTICS:-}" = "true" ]]; then
     export JRUBY_OPTS="$JRUBY_OPTS -Xjit.logging=true -J-Xlog:gc -J-XX:+PrintCompilation"
   fi

@@ -104,21 +104,37 @@ def main(argv=None):
         signal.signal(signal.SIGTERM, previous_term)
         outcomes = stop_instances(args.project, args.zone,
                                   (args.app_instance, args.loadgen_instance), args.wait_seconds)
-        record = {'project': args.project, 'zone': args.zone,
-                  'workflow_exit_code': workflow_status, 'instances': outcomes}
-        print(json.dumps(record, indent=2), flush=True)
-        if args.status_file:
-            args.status_file.parent.mkdir(parents=True, exist_ok=True)
-            args.status_file.write_text(json.dumps(record, indent=2) + '\n')
-
-        # Checksum verification if directory provided
+        checksum_verified = False
         if args.verify_checksums:
             try:
                 import run_gce_suite
+                source_manifest = args.verify_checksums / 'SHA256SUMS'
+                received = source_manifest.read_bytes() if source_manifest.exists() else None
                 chk = run_gce_suite.verify_artifact_checksums(args.verify_checksums)
-                print(f"Verified {chk['total_files']} files. Manifest: {chk['manifest_path']}", flush=True)
+                checksum_verified = True
+                preserved = args.verify_checksums / 'SHA256SUMS.received'
+                if received is not None and not preserved.exists():
+                    preserved.write_bytes(received)
+                print(f"Verified {chk['total_files']} files before updating cleanup evidence.", flush=True)
             except Exception as e:
                 print(f"Checksum verification failed: {e}", file=sys.stderr)
+                workflow_status = 1
+        record = {'project': args.project, 'zone': args.zone,
+                  'workflow_exit_code': workflow_status, 'instances': outcomes,
+                  'artifact_verification_passed': checksum_verified if args.verify_checksums else None}
+        print(json.dumps(record, indent=2), flush=True)
+        if args.status_file:
+            args.status_file.parent.mkdir(parents=True, exist_ok=True)
+            args.status_file.write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+
+        # Received hashes have already passed; include known local stop evidence.
+        # On failure keep the old manifest, rather than certifying altered data.
+        if checksum_verified:
+            try:
+                chk = run_gce_suite.write_artifact_checksums(args.verify_checksums)
+                print(f"Final manifest: {chk['manifest_path']}", flush=True)
+            except Exception as e:
+                print(f"Final checksum generation failed: {e}", file=sys.stderr)
                 workflow_status = 1
 
         # Disk cost control reminder and optional destroy
@@ -129,7 +145,7 @@ def main(argv=None):
                 f"To destroy disks permanently: cd {args.terraform_dir} && terraform destroy -var-file=terraform.tfvars",
                 flush=True
             )
-            if args.destroy:
+            if args.destroy and workflow_status == 0:
                 tfvars = args.terraform_dir / 'terraform.tfvars'
                 if not tfvars.exists():
                     print(f"terraform.tfvars not found in {args.terraform_dir}", file=sys.stderr)

@@ -5,6 +5,7 @@ import contextlib
 import copy
 import hashlib
 import json
+import math
 import os
 import platform
 import random
@@ -50,7 +51,7 @@ def crud_gate(checks, targets, scenario):
 def save(path, data):
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + '.tmp')
-    temp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+    temp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
     temp.replace(path)
 
 def command(args, timeout=300, log=None, check=True):
@@ -98,12 +99,27 @@ def config(path_or_dict):
             if p.get(key, 0) <= 0:
                 raise ValueError('Invalid capacity setting: ' + key)
     for key in ('capacity_min_rps', 'capacity_tolerance_ratio', 'recovery_probe_seconds',
-                'recovery_max_seconds', 'recovery_probe_rps'):
-        if key in p and (type(p[key]) not in (int, float) or p[key] <= 0):
+                'recovery_max_seconds', 'recovery_probe_rps', 'recovery_health_p99_ms'):
+        if key in p and (type(p[key]) not in (int, float) or not math.isfinite(p[key]) or p[key] <= 0):
             raise ValueError('Invalid profile setting: ' + key)
     for key in ('warmup_connections', 'capacity_max_steps', 'recovery_max_attempts'):
         if key in p and (type(p[key]) is not int or p[key] < 1):
             raise ValueError('Invalid profile setting: ' + key)
+    for key in ('preallocated_vus', 'max_vus'):
+        if key in p and (type(p[key]) is not int or p[key] < 1):
+            raise ValueError('Invalid profile setting: ' + key)
+    if p.get('max_vus', 4096 if p.get('capacity_search') else 50) < p.get(
+            'preallocated_vus', 512 if p.get('capacity_search') else 10):
+        raise ValueError('max_vus must be >= preallocated_vus')
+    for key in ('socket_observations', 'jfr', 'measurement_slo_required'):
+        if key in p and type(p[key]) is not bool:
+            raise ValueError(key + ' must be boolean')
+    if 'socket_interval_seconds' in p and (type(p['socket_interval_seconds']) not in (int, float)
+            or not math.isfinite(p['socket_interval_seconds']) or p['socket_interval_seconds'] < 1):
+        raise ValueError('socket_interval_seconds must be finite and >= 1')
+    if p.get('jfr') and (not p.get('diagnostics') or any(
+            TARGETS['targets'][t]['runtime'] != 'jruby' for t in p['targets'])):
+        raise ValueError('jfr requires diagnostics and JRuby-only targets')
     if p.get('capacity_tolerance_ratio', 0) >= 1:
         raise ValueError('capacity_tolerance_ratio must be below 1')
     if p.get('capacity_min_rps', 0) > p.get('capacity_start_rps', float('inf')):
@@ -323,6 +339,8 @@ class Server:
                 '-e', 'SPINEL_WORKERS='+str(self.profile['spinel_workers'])]
         if self.profile.get('diagnostics'):
             args += ['-e', 'BENCH_DIAGNOSTICS=1']
+        if self.profile.get('jfr'):
+            args += ['-e', 'BENCH_JFR=1']
         args += [tag(self.target)]
         save(self.directory / 'launch.json', {'argv': args, 'fixture': self.fixture})
         try:
@@ -364,6 +382,17 @@ class Server:
     def __exit__(self, *_):
         # Cleanup cannot be skipped by a failed log/inspect call.
         try:
+            if self.profile.get('jfr'):
+                evidence = {'status': 'unavailable'}
+                try:
+                    evidence['command_output'] = command(['docker', 'exec', self.name,
+                        'jcmd', '1', 'JFR.dump', 'name=bench', 'filename=/data/bench.jfr'], timeout=30)
+                    recording = self.database.parent / 'bench.jfr'
+                    evidence.update(status='captured' if recording.is_file() and recording.stat().st_size else 'unavailable',
+                                    file='data/bench.jfr', size_bytes=recording.stat().st_size if recording.is_file() else 0)
+                except (OSError, RuntimeError, subprocess.TimeoutExpired) as e:
+                    evidence['error'] = str(e)
+                save(self.directory / 'jfr-capture.json', evidence)
             self.record_cpu('cpu-end.json')
             with contextlib.suppress(OSError, RuntimeError, subprocess.TimeoutExpired):
                 command(['docker','logs',self.name],log=self.directory/'server.log',check=False,timeout=30)
@@ -521,6 +550,38 @@ def reuse_preflight(path, names):
     return checks
 
 def sample(server, endpoint, duration, p, cpus, directory=None, rate=None, phase=None):
+    """Retain phase wall time and optional sockets even on sampling failure."""
+    output = Path(directory) if directory else ROOT / 'bench-results/tmp'
+    output.mkdir(parents=True, exist_ok=True)
+    started = time.time(); clock = time.monotonic(); sockets = None
+    evidence = {'schema_version': 1, 'phase': phase, 'started_at': started,
+                'duration_configured_seconds': duration, 'status': 'failed',
+                'diagnostics': bool(p.get('diagnostics')), 'jfr': bool(p.get('jfr')),
+                'socket_observations': bool(p.get('socket_observations'))}
+    try:
+        if p.get('socket_observations'):
+            from observe import SocketCollector
+            sockets = SocketCollector(server.name, p.get('socket_interval_seconds', 2))
+            sockets.start()
+        measured = _sample(server, endpoint, duration, p, cpus, output, rate, phase)
+        evidence.update(status='completed', measurement_elapsed_seconds=measured.get('elapsed'))
+        return measured
+    except BaseException as e:
+        evidence['error'] = str(e)
+        raise
+    finally:
+        try:
+            if sockets:
+                save(output / 'socket-observations.json', sockets.stop())
+        except BaseException as e:
+            evidence.update(status='artifact_error', error=str(e))
+            raise
+        finally:
+            evidence.update(finished_at=time.time(), wall_seconds=time.monotonic()-clock)
+            save(output / 'phase.json', evidence)
+
+
+def _sample(server, endpoint, duration, p, cpus, directory=None, rate=None, phase=None):
     if p.get('driver') == 'k6':
         output_dir = Path(directory) if directory else ROOT / 'bench-results/tmp'
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -533,8 +594,8 @@ def sample(server, endpoint, duration, p, cpus, directory=None, rate=None, phase
         target_url = server.url if is_crud else server.url + endpoint
         env_args = ['-e', f'TARGET_URL={target_url}', '-e', f'DURATION={int(duration)}s',
                     '-e', f'RATE={rate}', '-e', f'TIMEOUT={int(p["request_timeout"])}s']
-        if p.get('capacity_search'):
-            env_args += ['-e', 'PRE_ALLOCATED_VUS=512', '-e', 'MAX_VUS=4096']
+        env_args += ['-e', 'PRE_ALLOCATED_VUS=' + str(p.get('preallocated_vus', 512 if p.get('capacity_search') else 10)),
+                     '-e', 'MAX_VUS=' + str(p.get('max_vus', 4096 if p.get('capacity_search') else 50))]
         if phase != 'warmup' and p.get('measurement_closed_loop'):
             env_args += ['-e', 'MODE=closed', '-e', f'WARMUP_VUS={p["connections"]}']
         if phase == 'warmup' and p.get('warmup_closed_loop'):
@@ -542,9 +603,12 @@ def sample(server, endpoint, duration, p, cpus, directory=None, rate=None, phase
         if is_crud:
             env_args += ['-e', f'NUM_ARTICLES={p.get("fixture_articles", 3)}',
                          '-e', f'SCENARIO={p.get("crud_scenario", "mix")}']
+        env_map = dict(v.split('=', 1) for i, v in enumerate(env_args) if i > 0 and env_args[i-1] == '-e')
+        save(output_dir / 'k6-invocation.json', {'script': script_rel, 'environment': env_map,
+             'phase': phase, 'load_mode': env_map.get('MODE', 'open'),
+             'remote_loadgen': p.get('remote_loadgen')})
 
         if p.get('remote_loadgen'):
-            env_map = dict(v.split('=', 1) for i, v in enumerate(env_args) if i > 0 and env_args[i-1] == '-e')
             RemoteLoadGenerator(p['remote_loadgen'], p['gce_zone'], p['gce_project']).run(
                 ROOT / script_rel, env_map, output_dir, duration + p['request_timeout'] + 30)
             measured = json.loads(summary_path.read_text())
@@ -609,6 +673,10 @@ def recover(server, endpoint, profile, cpus, directory):
     """Bounded low-load health checks; does not assert server queue drainage."""
     root = Path(directory)
     attempts = []
+    health_profile = dict(profile, slo_p99_ms=profile.get('recovery_health_p99_ms', profile['request_timeout'] * 1000))
+    recovery_evidence = {'health_p99_ms': health_profile['slo_p99_ms'], 'server_queue_drained': None,
+        'limitation': 'Response health is separate from performance SLO. '
+                      'No active-request gauge; healthy low-load probes do not prove queue drainage.'}
     deadline = time.monotonic() + profile.get('recovery_max_seconds', 60)
     for index in range(profile.get('recovery_max_attempts', 3)):
         if time.monotonic() >= deadline:
@@ -618,29 +686,29 @@ def recover(server, endpoint, profile, cpus, directory):
                        root / f'{index:03d}', rate=profile.get('recovery_probe_rps', 1), phase='recovery')
         except Exception as error:
             attempts.append({'attempt': index, 'decision': 'measurement_error', 'error': str(error)})
-            save(root / 'recovery.json', {'status': 'unrecovered', 'attempts': attempts,
-                                         'server_queue_drained': None})
+            save(root / 'recovery.json', dict(recovery_evidence, status='unrecovered', attempts=attempts))
             raise
-        state = capacity.decision(m, profile)
-        attempts.append({'attempt': index, 'decision': state, 'measurement': m})
-        save(root / 'recovery.json', {'status': 'healthy_probe' if state == 'pass' else 'pending',
-             'attempts': attempts, 'server_queue_drained': None,
-             'limitation': 'No active-request gauge; healthy low-load probes do not prove queue drainage.'})
+        state = capacity.decision(m, health_profile)
+        attempts.append({'attempt': index, 'decision': state,
+                         'performance_slo_decision': capacity.decision(m, profile), 'measurement': m})
+        save(root / 'recovery.json', dict(recovery_evidence,
+             status='healthy_probe' if state == 'pass' else 'pending', attempts=attempts))
         if state == 'pass':
             return m
         if state in ('invalid_client', 'transport_error', 'unclassified'):
             break
-    save(root / 'recovery.json', {'status': 'unrecovered', 'attempts': attempts,
-                                'server_queue_drained': None})
+    save(root / 'recovery.json', dict(recovery_evidence, status='unrecovered', attempts=attempts))
     raise RuntimeError('SUT recovery not verified; restart and rewarm in a separate trial')
 
 
 def trials(p, cpus, output, checks):
-    result = []
+    result = [dict(trial, status='not_run', reason='Trial not started') for trial in schedule(p)]
+    save(output / 'per-run.json', result)
     deadline = time.monotonic() + p['total_timeout']
-    for index, trial in enumerate(schedule(p)):
-        row = dict(trial, status='pending')
-        result.append(row)
+    for index, trial in enumerate(result):
+        row = trial
+        row.update(status='pending')
+        row.pop('reason', None)
         if trial['endpoint'] not in checks[trial['target']]['eligible_endpoints']:
             row.update(status='excluded', reason='Endpoint failed preflight')
         elif time.monotonic() >= deadline:
@@ -695,6 +763,8 @@ def trials(p, cpus, output, checks):
                         try:
                             import collect
                             if not p.get('capacity_search'):
+                                if p.get('measurement_slo_required'):
+                                    measurement_cpu_before = server.record_cpu('measurement-cpu-before.json')
                                 collector = collect.ResourceCollector(server.name, interval=1.0)
                                 collector.start()
                         except Exception as e:
@@ -758,6 +828,12 @@ def trials(p, cpus, output, checks):
                         finally:
                             if collector:
                                 telemetry = collector.stop()
+                                if p.get('measurement_slo_required'):
+                                    after_cpu = server.record_cpu('measurement-cpu-after.json')
+                                    before_throttle = throttled_count(measurement_cpu_before.get('cpu.stat'))
+                                    after_throttle = throttled_count(after_cpu.get('cpu.stat'))
+                                    telemetry['summary']['throttled_periods_delta'] = (
+                                        after_throttle - before_throttle if before_throttle is not None and after_throttle is not None else None)
                         save(directory / 'telemetry.json', telemetry)
                         row.update(measurement=measured, telemetry=telemetry)
                         if is_crud:
@@ -787,7 +863,13 @@ def trials(p, cpus, output, checks):
                         if p.get('capacity_search'):
                             has_errors = (has_errors or capacity_result['status'] != 'pass' or
                                 telemetry.get('summary', {}).get('sample_count', 0) == 0 or
-                                (telemetry.get('summary', {}).get('throttled_periods_delta') or 0) > 0 or
+                                telemetry.get('summary', {}).get('throttled_periods_delta') != 0 or
+                                telemetry.get('summary', {}).get('oom_killed', False))
+                        if p.get('measurement_slo_required'):
+                            row['measurement_classification'] = capacity.classify(measured, p)
+                            has_errors = (has_errors or row['measurement_classification']['category'] != 'slo_pass' or
+                                telemetry.get('summary', {}).get('sample_count', 0) == 0 or
+                                telemetry.get('summary', {}).get('throttled_periods_delta') != 0 or
                                 telemetry.get('summary', {}).get('oom_killed', False))
                         final_status = 'failed' if has_errors else (
                             'verified' if verification_only else ('unstable' if not ready else 'passed'))

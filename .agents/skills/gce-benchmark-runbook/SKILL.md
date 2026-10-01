@@ -1,11 +1,23 @@
 ---
 name: gce-benchmark-runbook
-description: Execute the formal two-VM c3-standard-4 Rails/Roundhouse/Spinel capacity benchmark, recover raw artifacts, write the evidence-based GCE report, and clean up both VMs and disks. Use for GCE benchmark execution or formal result publication, separate from quick GitHub Actions checks.
+description: Prepare or execute two-VM C3 Rails/Roundhouse comparisons, targeted follow-up experiments and Spinel connection diagnostics; recover raw evidence, publish the report and stop both VMs. Use for GCE benchmark execution, retest instructions or formal result publication, separate from quick GitHub Actions checks.
 ---
 
 # GCE benchmark runbook
 
 Use the repository's `bench/profiles/gce-c3-capacity.yml` and [formal experiment contract](../../../docs/gce-c3-benchmark-report.md). Read [report guidance](references/report-writing.md) before interpreting results. Do not substitute the hosted Actions `quick` or manual `full` results for GCE capacity.
+
+## Select the experiment before launching
+
+For follow-up to the October 1 release, read [the current report](../../../docs/roundhouse-rails-jit-aot-report.md) and [targeted retest instructions](../../../docs/gce-c3-followup-instructions.md). Use `scripts/bench/retest_plan.py`, not the default 9-target/120-hour profile. Plan generation is allowed when asked for instructions; that request does not authorize starting VMs or load.
+
+Prepare `--experiment matched-rate --output NEW_PATH` without `--execute`. Review all generated profiles and argv. Execution requires a distinct new output path, `--execute`, matching `--preflight-file` and all four remote placement flags. Rebuild and rerun preflight at the immutable merged source SHA; an earlier release's manifest is not reusable.
+
+Order: common 10 RPS for the main six targets (3 repetitions), then separate CRuby 4-target and JRuby JIT 2-target capacity cohorts (5 repetitions each), then Spinel pool 10/512 at 10/15/25 RPS (3 each). JRuby Off remains supplementary. Review/recover each experiment before the next. Keep trace cohorts separate and conditional. See instructions for 6/8/6/4-hour global deadlines; budget exhaustion must preserve partial results and not-run rows. Spinel's deadline covers all six cells.
+
+Fixed-rate `measurement_slo_required` enforces the same 100-ms/error/client/App criteria as capacity; successful 10 RPS does not estimate capacity. Recovery health uses its own recorded latency threshold and retains performance SLO separately. Healthy responses and TCP queues never prove HTTP queue drainage. Inspect phase wall time, actual k6 invocation, optional socket evidence and actual JFR capture; missing evidence stays unknown. Baselines disable diagnostics/socket/JFR. Retain both-VM cleanup and source/final manifests under the same root run. The single-profile `run_gce_suite.py` does not implement this multi-experiment workflow.
+
+## Original full-matrix lifecycle
 
 1. Record the exact remote commit SHA, project, zone, existing VPC/subnet and Cloud NAT. Create a local `infra/terraform/terraform.tfvars` from `example.tfvars.example`. Review `terraform plan`; the module must create two private `c3-standard-4` VMs (`bench-app-c3`, `bench-loadgen-c3`), not a new VPC or NAT. (If migrating from legacy state with `bench-runner-c3`, verify its replacement). Apply only with operator authorization. Obtain `app_internal_ip`, `app_instance_name`, `loadgen_instance_name` and `zone` from Terraform outputs. Confirm both VMs have `/var/run/startup-completed`.
    - **SSH & Permissions**: On Windows with PuTTY/Plink, pass `echo y | ...` on first connection to cache host keys. In PowerShell, use single quotes for remote commands to prevent local `$()` expansion.

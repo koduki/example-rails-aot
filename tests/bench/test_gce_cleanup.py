@@ -4,6 +4,7 @@ import io
 import json
 import subprocess
 import tempfile
+import sys
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -11,6 +12,8 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'scripts/bench'))
+import run_gce_suite
 spec = importlib.util.spec_from_file_location('gce_cleanup', ROOT / 'scripts/bench/gce_cleanup.py')
 cleanup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cleanup)
@@ -63,6 +66,39 @@ class GceCleanupTests(unittest.TestCase):
             self.assertEqual(cleanup.main(['--project', 'p', '--zone', 'z',
                                            '--after', 'workflow']), 130)
         stop.assert_called_once()
+
+    def test_cleanup_retry_verifies_before_mutating_and_preserves_source_manifest(self):
+        stopped={name:{'stopped':True,'status':'TERMINATED'} for name in cleanup.INSTANCES}
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            (root/'plan.json').write_text('{}')
+            (root/'env.json').write_text('{}')
+            (root/'trials').mkdir();(root/'trials/per-run.json').write_text('[]')
+            run_gce_suite.verify_artifact_checksums(root)
+            received=(root/'SHA256SUMS').read_bytes()
+            args=['--project','p','--zone','z','--status-file',str(root/'cleanup.json'),
+                  '--verify-checksums',str(root)]
+            with patch.object(cleanup,'stop_instances',return_value=stopped),redirect_stdout(io.StringIO()):
+                self.assertEqual(cleanup.main(args),0)
+                self.assertEqual(cleanup.main(args),0)
+            self.assertEqual((root/'SHA256SUMS.received').read_bytes(),received)
+            self.assertTrue(json.loads((root/'cleanup.json').read_text())['artifact_verification_passed'])
+            run_gce_suite.verify_artifact_checksums(root)
+
+    def test_corruption_still_stops_both_and_does_not_replace_failed_manifest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);(root/'plan.json').write_text('{}')
+            with redirect_stdout(io.StringIO()):run_gce_suite.verify_artifact_checksums(root)
+            old=(root/'SHA256SUMS').read_bytes();(root/'plan.json').write_text('{"changed":true}')
+            stopped={name:{'stopped':True,'status':'TERMINATED'} for name in cleanup.INSTANCES}
+            with patch.object(cleanup,'stop_instances',return_value=stopped) as stop, \
+                    patch.object(cleanup.subprocess,'run') as destroy,redirect_stdout(io.StringIO()):
+                code=cleanup.main(['--project','p','--zone','z','--status-file',str(root/'cleanup.json'),
+                                   '--verify-checksums',str(root),'--destroy'])
+            self.assertEqual(code,1);stop.assert_called_once()
+            destroy.assert_not_called()
+            self.assertEqual((root/'SHA256SUMS').read_bytes(),old)
+            self.assertFalse(json.loads((root/'cleanup.json').read_text())['artifact_verification_passed'])
 
 
 if __name__ == '__main__':

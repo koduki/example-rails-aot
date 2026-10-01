@@ -136,6 +136,17 @@ def verify_artifact_checksums(directory):
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                 raise ValueError(f'Checksum mismatch or missing file: {name}')
 
+    return write_artifact_checksums(dir_path)
+
+
+def write_artifact_checksums(directory):
+    """Write current hashes; this does not verify a received manifest.
+
+    Only use after verifying the prior bundle and adding known local evidence.
+    """
+    dir_path = Path(directory)
+    if not dir_path.is_dir():
+        raise FileNotFoundError(f'Artifact directory does not exist: {directory}')
     checksums = {}
     total_files = 0
     total_bytes = 0
