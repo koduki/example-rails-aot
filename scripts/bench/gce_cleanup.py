@@ -30,6 +30,7 @@ def stop_instances(project, zone, instances=INSTANCES, wait_seconds=300):
     """Attempt each stop independently, and confirm each VM is TERMINATED."""
     outcomes = {}
     pending = []
+    requested_at = {name: time.time() for name in instances}
     for name in instances:
         try:
             status = gcloud('describe', name, f'--project={project}', f'--zone={zone}',
@@ -57,6 +58,8 @@ def stop_instances(project, zone, instances=INSTANCES, wait_seconds=300):
             outcomes[name] = {'status': status, 'stopped': True}
         except (OSError, subprocess.SubprocessError, TimeoutError) as error:
             outcomes[name] = {'stopped': False, 'error': str(error)}
+    for name, outcome in outcomes.items():
+        outcome.update(requested_at=requested_at[name], checked_at=time.time())
     return outcomes
 
 

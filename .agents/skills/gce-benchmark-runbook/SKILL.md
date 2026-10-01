@@ -30,7 +30,7 @@ Use the repository's `bench/profiles/gce-c3-capacity.yml` and [formal experiment
 
    The preflight manifest next to `preflight.json` binds the code, image IDs and target coverage; rerun preflight after any change. Do not run the quick or hosted `full` profile as a replacement.
 
-   The formal capacity run executes 45 trials (9 targets × 5 repetitions) with warmup, search, and confirmation. With adaptive warmup early exit (`warmup_fail_fast_windows`) and tuned convergence thresholds (`max_cv: 0.08`), execution takes approximately ~4–6 hours (down from ~11–13 hours previously where JIT-off variants consumed all 900s of warmup budget). To prevent SSH connection drops from aborting the run, launch it in a detached `tmux` session on `bench-app-c3`:
+   The formal capacity run executes 45 trials (9 targets × 5 repetitions) with warmup, search, and confirmation. Elapsed time depends on convergence, confirmation refinement and recovery attempts; do not promise a fixed duration. Check the total budget and retain any not-run trials. Read [the measurement protocol](references/measurement-protocol.md) before selecting warmup VUs, bounds and tolerance. To prevent SSH connection drops from aborting the run, launch it in a detached `tmux` session on `bench-app-c3`:
    ```bash
    tmux new-session -d -s bench 'python3 scripts/bench/run.py run \
      --profile bench/profiles/gce-c3-capacity.yml \
@@ -55,15 +55,15 @@ Use the repository's `bench/profiles/gce-c3-capacity.yml` and [formal experiment
 ### Automated Unmanned Orchestration & Disk Lifecycle Wrapper
 To execute the full lifecycle in a single command from the operator machine:
 ```bash
-python scripts/bench/run_gce_suite.py --project PROJECT_ID --zone ZONE --run-id RUN_ID
+python scripts/bench/run_gce_suite.py --project PROJECT_ID --zone ZONE --run-id RUN_ID --source-ref SOURCE_SHA
 ```
 This orchestrator automatically:
 1. Verifies/starts both VMs (`bench-app-c3`, `bench-loadgen-c3`) and discovers private IPs
 2. Runs container build and strict preflight validation
 3. Executes the full benchmark run and generates reports
 4. Downloads all raw artifacts via SCP through IAP
-5. Computes and verifies SHA-256 checksums, creating `SHA256SUMS`
-6. Guarantees both VMs are stopped (`TERMINATED`) in a `finally` block
+5. Verifies any received `SHA256SUMS` before regeneration, records exact fetched source SHA in `execution.json`, and includes local cleanup evidence in the final manifest
+6. Attempts both stops in `finally`, records timestamped results in `cleanup.json`, and returns failure unless both report `TERMINATED`
 7. Displays persistent disk cost warnings and provides safe `terraform destroy` guidance (or `--auto-destroy` if authorized).
 
 If a separate `gce-benchmark-runner` automation script becomes available, inspect its current implementation before using it: require the two VM names, exact source SHA, complete local artifact recovery, independent stop/verification of **both** VMs, and an explicit disk lifecycle. Its earlier one-VM defaults must not override this runbook.

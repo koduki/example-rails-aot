@@ -51,6 +51,36 @@ const data = {state: {testRunDurationMs: 10000}, metrics: {
                     self.assertEqual(summary['operations']['ops_successful_rate'], 50)
                 self.assertIn('p(99)', source)
 
+    @unittest.skipUnless(shutil.which('node'), 'Node is needed for k6 boundary tests')
+    def test_read_fractional_rate_and_failure_categories(self):
+        source = (ROOT / 'bench/k6/read.js').read_text()
+        source = '\n'.join(line for line in source.splitlines() if not line.startswith('import '))
+        source = source.replace('export const ', 'const ').replace('export default function', 'function defaultFunction').replace('export function ', 'function ')
+        harness = """
+const __ENV = {RATE: '0.625', TARGET_URL: 'http://localhost/articles', EXPECTED_ARTICLES: '0'};
+const counters = {};
+const Counter = function(name) { counters[name] = 0; this.add = n => counters[name] += n; };
+const check = (res, tests) => Object.values(tests).every(test => Boolean(test()));
+const responses = [
+ {status: 0, error: 'request timeout', headers: {}, body: ''},
+ {status: 0, error: 'connection refused', headers: {}, body: ''},
+ {status: 503, headers: {}, body: 'unavailable'},
+ {status: 200, headers: {'Content-Type': 'text/html'}, body: '<html>truncated'},
+ {status: 200, headers: {'Content-Type': 'text/html'}, body: '<html>ok</html>'}
+];
+const http = {get: () => responses.shift()};
+""" + source + """
+for (let i=0; i<5; i++) defaultFunction();
+console.log(JSON.stringify({counters, scenario: options.scenarios.open_arrival_reads}));
+"""
+        result = subprocess.run(['node', '-e', harness], text=True, capture_output=True, check=True)
+        data = json.loads(result.stdout)
+        self.assertEqual(data['scenario']['rate'], 625)
+        self.assertEqual(data['scenario']['timeUnit'], '1000s')
+        for name in ('timeout_failures', 'network_failures', 'http_status_failures', 'integrity_failures', 'successful_requests'):
+            self.assertEqual(data['counters'][name], 1)
+        self.assertEqual(data['counters']['check_failures'], 4)
+
     def test_k6_missing_summary_fails_without_closed_loop_fallback(self):
         server = Mock(url='http://localhost:3000')
         p = {'driver': 'k6', 'request_timeout': 5, 'offered_rps': 50}

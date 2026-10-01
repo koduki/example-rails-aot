@@ -139,11 +139,12 @@ class TestReversalAnalysis(unittest.TestCase):
 
         md = reversal_analysis.generate_reversal_report(warmup, fixed_100)
         self.assertIn("Rails vs Roundhouse Performance Reversal Diagnostic", md)
-        self.assertIn("1,000,000", md)
-        self.assertIn("2,500x", md)
         self.assertIn("peak_container_memory_bytes", md)
-        self.assertIn("❌ Not Confirmed (0/5)", md)
-        self.assertIn("Exploratory Warmup Ratios", md)
+        self.assertIn("No stage timings", md)
+        self.assertIn("61.5", md)
+        self.assertNotIn("32.8 ms", md)
+        self.assertNotIn("confirmed an active", md)
+
 
 
 if __name__ == "__main__":

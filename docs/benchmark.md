@@ -279,3 +279,7 @@ requests and zero dropped iterations. The [raw artifact](https://github.com/kodu
 contains the preflight, per-trial measurements, database snapshots, and
 resource telemetry. These are functional checks under low offered load, not
 steady-state latency or capacity estimates.
+
+## Evidence review and diagnostic sweeps
+
+The [C3 measurement protocol](../.agents/skills/gce-benchmark-runbook/references/measurement-protocol.md) defines capacity intervals, bounded health probes, same-load comparisons and trace requirements. `scripts/bench/load_sweep.py` prepares low-VU/rate diagnostic cells by default; execution requires `--execute`, fresh preflight and all remote-placement flags. Instrumented cohorts remain separate. The September 30 release remains a legacy candidate cohort and is not changed by the revised runner.

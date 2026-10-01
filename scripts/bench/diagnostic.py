@@ -8,6 +8,7 @@ import argparse
 import io
 import json
 import math
+import re
 import statistics
 from pathlib import Path
 
@@ -35,25 +36,28 @@ def parse_diagnostic_artifacts(root_path):
                 if trial_json.exists():
                     record['trial'] = json.loads(trial_json.read_text(encoding='utf-8'))
                 else:
-                    prog_target = target_from_dir
-                    prog_rep = 1
-                    prog_file = d / 'progress.json'
-                    if prog_file.exists():
-                        try:
-                            prog = json.loads(prog_file.read_text(encoding='utf-8'))
-                            prog_target = prog.get('target', target_from_dir)
-                            prog_rep = prog.get('repetition', 1)
-                        except Exception:
-                            pass
-                    record['trial'] = {
-                        'target': prog_target,
-                        'repetition': prog_rep,
-                        'status': 'unstable',
-                        'endpoint': '/articles?page=1'
-                    }
+                    authoritative = next((row for index, row in enumerate(trial_rows)
+                        if d.name == f"{index:04d}-{row.get('target')}"), None)
+                    record['trial'] = authoritative or {'target': target_from_dir,
+                        'repetition': None, 'status': 'missing', 'endpoint': None}
+                    record['missing'] = ['trial.json']
                 warmup_json = d / 'warmup.json'
                 if warmup_json.exists():
                     record['warmup'] = json.loads(warmup_json.read_text(encoding='utf-8'))
+                    for index, window in enumerate(record['warmup']):
+                        log = d / f'warmup-{index:03d}' / 'k6.log'
+                        if 'failure_counts' in window or not log.exists():
+                            continue
+                        # Direct per-request log evidence, never latency inference.
+                        text = log.read_text(encoding='utf-8', errors='replace')
+                        timeouts = sum(bool(re.search(r'msg="Request Failed".*error="(?:.*: )?request timeout"$', line))
+                                       for line in text.splitlines())
+                        failed = window.get('requests_failed', window.get('errors', 0))
+                        if timeouts and timeouts <= failed:
+                            window['failure_counts'] = {'timeout': timeouts}
+                            window['failure_counts_evidence'] = str(log.relative_to(root))
+                        elif timeouts > failed:
+                            record.setdefault('missing', []).append(f'{log.relative_to(root)}: failure-count mismatch')
                 diag_json = d / 'diagnostics.json'
                 if diag_json.exists():
                     record['diagnostics'] = json.loads(diag_json.read_text(encoding='utf-8'))
@@ -147,7 +151,21 @@ def analyze_warmup_trajectory(windows, p=None):
                 if idx + 1 == n_windows:
                     final_cv = round(cv, 4)
                     final_drift = round(drift, 4)
-                if not stabilized and cv <= max_cv and drift <= max_drift:
+                # Rate convergence alone cannot certify stable failed traffic.
+                clean = all(sw.get('requests_failed', sw.get('errors', 0)) == 0
+                            and not sw.get('iterations_dropped', 0) and not sw.get('client_saturated')
+                            for sw in sub)
+                latency_keys = ('p95', 'p99') if (p or {}).get('capacity_search') else ('p95',)
+                latency_stable = True
+                for key in latency_keys:
+                    values = [sw.get('latency_ms', {}).get(key, sw.get(key + '_ms')) for sw in sub]
+                    if any(value is None or value <= 0 for value in values):
+                        latency_stable = False
+                        break
+                    avg = statistics.mean(values)
+                    latency_stable &= statistics.pstdev(values)/avg <= max_cv
+                    latency_stable &= abs(statistics.mean(values[-half:])-statistics.mean(values[:half]))/avg <= max_drift
+                if not stabilized and clean and latency_stable and cv <= max_cv and drift <= max_drift:
                     stabilized = True
                     stabilized_at = round(curr_elapsed, 1)
 
@@ -167,193 +185,87 @@ def analyze_warmup_trajectory(windows, p=None):
     }
 
 def analyze_failure_taxonomy(windows):
-    """Classify warmup window errors into timeout, http status, integrity, client saturation."""
-    if not windows:
-        return {
-            'total_windows': 0,
-            'failed_windows': 0,
-            'failed_windows_pct': 0.0,
-            'total_requests': 0,
-            'successful_requests': 0,
-            'failed_requests': 0,
-            'error_rate_pct': 0.0,
-            'timeout_failures': 0,
-            'http_failures': 0,
-            'client_saturated_windows': 0,
-            'integrity_failures': 0,
-        }
-    tot_windows = len(windows)
-    failed_windows = 0
-    tot_reqs = 0
-    succ_reqs = 0
-    fail_reqs = 0
-    timeout_fails = 0
-    http_fails = 0
-    client_sat = 0
-    integrity_fails = 0
-
+    """Use explicit counters; historic latency tails cannot classify failures."""
+    total = sum(w.get('requests_total', 0) for w in windows)
+    failed = sum(w.get('requests_failed', w.get('errors', 0)) for w in windows)
+    counts = {'timeout_failures': 0, 'network_failures': 0, 'http_failures': 0,
+              'integrity_failures': 0, 'unknown_failures': 0}
     for w in windows:
-        reqs = w.get('requests_total', 0)
-        failed = w.get('requests_failed', w.get('errors', 0))
-        succ = w.get('requests_successful', max(0, reqs - failed))
-        tot_reqs += reqs
-        fail_reqs += failed
-        succ_reqs += succ
-        if failed > 0:
-            failed_windows += 1
-        if w.get('client_saturated', False):
-            client_sat += 1
+        n = w.get('requests_failed', w.get('errors', 0))
+        categories = w.get('failure_counts')
+        if categories is None:
+            counts['unknown_failures'] += n
+            continue
+        for field, key in [('timeout_failures', 'timeout'), ('network_failures', 'network'),
+                           ('http_failures', 'http_status'), ('integrity_failures', 'response_integrity')]:
+            counts[field] += categories.get(key, 0)
+        known = sum(categories.get(k, 0) for k in ('timeout', 'network', 'http_status', 'response_integrity'))
+        counts['unknown_failures'] += max(0, n - known)
+    failed_windows = sum(w.get('requests_failed', w.get('errors', 0)) > 0 for w in windows)
+    return dict(counts, total_windows=len(windows), failed_windows=failed_windows,
+                failed_windows_pct=round(100 * failed_windows / len(windows), 2) if windows else None,
+                total_requests=total, successful_requests=total-failed, failed_requests=failed,
+                error_rate_pct=round(100 * failed / total, 3) if total else None,
+                client_saturated_windows=sum(bool(w.get('client_saturated')) for w in windows))
 
-        lat = w.get('latency_ms', {})
-        p99 = lat.get('p99', w.get('p99_ms', 0))
-        mx = lat.get('max', 0)
-        if mx >= 4990 or p99 >= 4990:
-            timeout_fails += failed
-        else:
-            http_fails += failed
-
-        raw_metrics = w.get('raw', {}).get('metrics', {})
-        if 'integrity_failures' in raw_metrics:
-            integrity_fails += raw_metrics['integrity_failures'].get('values', {}).get('count', 0)
-
-    err_rate = round((fail_reqs / max(1, tot_reqs)) * 100, 2)
-    failed_win_pct = round((failed_windows / max(1, tot_windows)) * 100, 2)
-
-    return {
-        'total_windows': tot_windows,
-        'failed_windows': failed_windows,
-        'failed_windows_pct': failed_win_pct,
-        'total_requests': tot_reqs,
-        'successful_requests': succ_reqs,
-        'failed_requests': fail_reqs,
-        'error_rate_pct': err_rate,
-        'timeout_failures': timeout_fails,
-        'http_failures': http_fails,
-        'client_saturated_windows': client_sat,
-        'integrity_failures': integrity_fails,
-    }
 
 def analyze_concurrency_and_queuing(windows, cpu_start=None, cpu_end=None, num_threads=4, target_name=''):
-    """Analyze concurrency, queue delays, service times, and CPU utilization."""
-    if not windows:
-        return {}
-
-    mins = [w.get('latency_ms', {}).get('min') for w in windows if w.get('latency_ms', {}).get('min') is not None]
-    meds = [w.get('latency_ms', {}).get('med') for w in windows if w.get('latency_ms', {}).get('med') is not None]
-    p95s = [w.get('latency_ms', {}).get('p95') for w in windows if w.get('latency_ms', {}).get('p95') is not None]
-    p99s = [w.get('latency_ms', {}).get('p99') for w in windows if w.get('latency_ms', {}).get('p99') is not None]
-    rps_list = [w.get('rps_successful', w.get('rps', 0)) for w in windows]
-    vus = max([w.get('vus_peak', 32) for w in windows] or [32])
-
-    min_lat = min(mins) if mins else 0.0
-    med_lat = statistics.median(meds) if meds else 0.0
-    avg_rps = statistics.mean(rps_list) if rps_list else 0.0
-
-    estimated_service_time_ms = round(min_lat, 1)
-    ts_sec = (estimated_service_time_ms / 1000.0) if estimated_service_time_ms > 0 else 0.001
-    max_theoretical_rps = round(num_threads / ts_sec, 2) if ts_sec > 0 else 0.0
-
-    est_queue_depth = max(0, vus - num_threads)
-    est_queue_delay_ms = round(est_queue_depth * (estimated_service_time_ms / max(1, num_threads)), 1)
-    est_total_response_time_ms = round(estimated_service_time_ms + est_queue_delay_ms, 1)
-
-    cpu_breakdown = {}
+    """Describe observations. HTTP minimum is not measured service/queue time."""
+    def values(key):
+        return [w['latency_ms'][key] for w in windows if (w.get('latency_ms') or {}).get(key) is not None]
+    rates = [w.get('rps_successful', w.get('rps')) for w in windows]
+    rates = [v for v in rates if v is not None]
+    observed = {'http_min_ms': min(values('min')) if values('min') else None,
+                'median_of_window_medians_ms': statistics.median(values('med')) if values('med') else None,
+                'mean_window_successful_rps': statistics.mean(rates) if rates else None}
+    cpu = {}
     if cpu_start and cpu_end:
-        def parse_stat(raw):
-            res = {}
-            for line in raw.strip().splitlines():
-                parts = line.split()
-                if len(parts) >= 2 and parts[1].isdigit():
-                    res[parts[0]] = int(parts[1])
-            return res
+        def stat(data):
+            return {k: int(v) for k, v in (line.split() for line in (data.get('cpu.stat') if isinstance(data.get('cpu.stat'), str) else '').splitlines())}
+        first, last = stat(cpu_start), stat(cpu_end)
+        delta = last.get('usage_usec', 0) - first.get('usage_usec', 0)
+        # Endpoints bracket the complete trial (including search/orchestration).
+        # Without timestamps, dividing by the sum of warmup windows is invalid.
+        elapsed = (cpu_end.get('timestamp', 0) - cpu_start.get('timestamp', 0))
+        if delta >= 0 and 'usage_usec' in first and 'usage_usec' in last:
+            cpu = {'usage_delta_usec': delta,
+                   'vcpus_active': round(delta / elapsed / 1e6, 3) if elapsed > 0 else None,
+                   'elapsed_seconds': elapsed if elapsed > 0 else None,
+                   'pct_user': round(100 * (last.get('user_usec', 0)-first.get('user_usec', 0)) / delta, 2) if delta else None,
+                   'pct_system': round(100 * (last.get('system_usec', 0)-first.get('system_usec', 0)) / delta, 2) if delta else None,
+                   'throttled_periods': last.get('nr_throttled', 0)-first.get('nr_throttled', 0)}
+    return {'concurrency_vus': max((w.get('vus_peak', 0) for w in windows), default=0),
+            'threads': num_threads, 'observed': observed,
+            'observed_successful_rps': observed['mean_window_successful_rps'],
+            'cpu_metrics': cpu, 'root_cause': 'unresolved',
+            'estimated_service_time_ms': None, 'estimated_queue_depth': None,
+            'estimated_queue_delay_ms': None, 'max_theoretical_throughput_rps': None,
+            'hypotheses': ['CPU/allocations', 'DB or connection wait', 'HTTP connection handling',
+                           'worker scheduling/GC pauses'],
+            'missing_evidence': ['single-request stage timings', 'CPU/wait traces', 'low-load sweep']}
 
-        s_stat = parse_stat(cpu_start.get('cpu.stat', ''))
-        e_stat = parse_stat(cpu_end.get('cpu.stat', ''))
-        d_usage = e_stat.get('usage_usec', 0) - s_stat.get('usage_usec', 0)
-        d_user = e_stat.get('user_usec', 0) - s_stat.get('user_usec', 0)
-        d_system = e_stat.get('system_usec', 0) - s_stat.get('system_usec', 0)
-        tot_elapsed = sum(w.get('elapsed', 0) for w in windows)
 
-        vcpus_used = round(d_usage / (tot_elapsed * 1_000_000), 2) if tot_elapsed > 0 else 0.0
-        pct_user = round((d_user / max(1, d_usage)) * 100, 1) if d_usage > 0 else 0.0
-        pct_system = round((d_system / max(1, d_usage)) * 100, 1) if d_usage > 0 else 0.0
+def compute_viable_load_envelope(target_name, service_time_ms=None, num_threads=4,
+                                slo_p99_ms=100.0, timeout_ms=5000.0, observations=None, profile=None):
+    """Confirm measured points only; never manufacture a safe range from a name."""
+    import capacity
+    contract = dict(profile or {}, slo_p99_ms=slo_p99_ms)
+    contract.setdefault('max_error_rate', 0.001)
+    duration = contract.get('measurement_seconds', 120)
+    points = []
+    for m in observations or []:
+        if (m.get('driver') == 'k6-open-arrival' and m.get('elapsed', 0) >= duration
+                and m.get('rate_offered') is not None and capacity.decision(m, contract) == 'pass'):
+            points.append({'offered_rps': m['rate_offered'], 'elapsed_seconds': m['elapsed'],
+                           'p99_ms': m['latency_ms']['p99'], 'requests_failed': m['requests_failed']})
+    return {'target': target_name, 'status': 'confirmed_points' if points else 'unconfirmed',
+            'confirmed_points': points, 'slo_achievable': True if points else None,
+            'safe_open_arrival_rps': None, 'max_viable_concurrency_vus_no_timeout': None,
+            'max_viable_concurrency_vus_slo': None, 'service_time_ms': None,
+            'notes': 'Only listed measured points passed; unmeasured ranges and causes remain unresolved.'}
 
-        cpu_breakdown = {
-            'vcpus_active': vcpus_used,
-            'pct_user': pct_user,
-            'pct_system': pct_system,
-            'throttled_periods': e_stat.get('nr_throttled', 0) - s_stat.get('nr_throttled', 0),
-        }
 
-    root_cause = "Unknown"
-    if 'jruby-off' in target_name:
-        if estimated_service_time_ms >= 1000.0 and est_total_response_time_ms >= 5000.0:
-            root_cause = (
-                f"Interpreter CPU saturation: single-request service time ({estimated_service_time_ms}ms) "
-                f"under {vus} VUs creates an estimated queue delay of {est_queue_delay_ms}ms on {num_threads} Puma threads, "
-                f"exceeding the 5,000ms request timeout. CPU is {cpu_breakdown.get('pct_user', 99.9)}% user-mode bytecode interpretation."
-            )
-    elif 'spinel' in target_name:
-        root_cause = (
-            f"Tail queue saturation under 32 VUs: {num_threads} OS workers running coroutines hit 8:1 VU concurrency ratio. "
-            f"While median latency is healthy ({med_lat:.1f}ms, ~{avg_rps:.1f} RPS), synchronous SQLite calls and in-memory slicing "
-            f"create transient queue spikes causing ~2.26% tail timeouts (>5000ms)."
-        )
-
-    return {
-        'concurrency_vus': vus,
-        'threads': num_threads,
-        'estimated_service_time_ms': estimated_service_time_ms,
-        'max_theoretical_throughput_rps': max_theoretical_rps,
-        'observed_successful_rps': round(avg_rps, 2),
-        'estimated_queue_depth': est_queue_depth,
-        'estimated_queue_delay_ms': est_queue_delay_ms,
-        'estimated_response_time_ms': est_total_response_time_ms,
-        'cpu_metrics': cpu_breakdown,
-        'root_cause': root_cause,
-    }
-
-def compute_viable_load_envelope(target_name, service_time_ms, num_threads=4, slo_p99_ms=100.0, timeout_ms=5000.0):
-    """Compute the viable operating envelope (max VU concurrency and arrival rate RPS)."""
-    ts_sec = (service_time_ms / 1000.0) if service_time_ms > 0 else 0.001
-    max_theoretical_rps = num_threads / ts_sec
-
-    max_vus_no_timeout = max(1, int(num_threads * (timeout_ms / max(1.0, service_time_ms))))
-    slo_achievable = service_time_ms <= slo_p99_ms
-    max_vus_slo = max(1, int(num_threads * (slo_p99_ms / max(1.0, service_time_ms)))) if slo_achievable else 0
-    safe_rps = round(0.75 * max_theoretical_rps, 1)
-
-    if 'jruby-off' in target_name:
-        status = "unsupported_for_capacity_ranking"
-        notes = (
-            f"Service time ({service_time_ms:.0f}ms) exceeds the 100ms SLO contract by {service_time_ms/slo_p99_ms:.1f}x. "
-            f"Viable only at low concurrency (<= {min(4, max_vus_no_timeout)} VUs) and low rate (<= {min(2.0, safe_rps)} RPS). "
-            f"Unsupported for production capacity comparison."
-        )
-    elif 'spinel' in target_name:
-        status = "conditionally_viable"
-        notes = (
-            f"Median service time is within SLO range (~{service_time_ms:.1f}ms). "
-            f"Viable at concurrency <= 16 VUs and open-arrival rates <= 40-50 RPS where error rate is 0.0%. "
-            f"32 VUs closed-loop over-saturates the 4 OS worker queue."
-        )
-    else:
-        status = "viable"
-        notes = "Capacity within standard operating bounds."
-
-    return {
-        'target': target_name,
-        'status': status,
-        'service_time_ms': service_time_ms,
-        'max_theoretical_rps': round(max_theoretical_rps, 1),
-        'safe_open_arrival_rps': safe_rps,
-        'max_viable_concurrency_vus_no_timeout': max_vus_no_timeout,
-        'max_viable_concurrency_vus_slo': max_vus_slo,
-        'slo_achievable': slo_achievable,
-        'notes': notes,
-    }
-
-def analyze_jruby_matrix(trials_by_target, endpoint):
+def _single_jruby_matrix(trials_by_target, endpoint):
     """Compute JRuby 2x2 matrix: Rails vs Emitted, compile.mode=JIT vs OFF."""
     def get_target_data(target_name):
         entries = trials_by_target.get(target_name, [])
@@ -426,7 +338,7 @@ def analyze_jruby_matrix(trials_by_target, endpoint):
         ]),
     }
 
-def analyze_cruby_matrix(trials_by_target, endpoint):
+def _single_cruby_matrix(trials_by_target, endpoint):
     """Compute CRuby / YJIT 2x2 matrix: Rails vs Emitted, YJIT ON vs OFF."""
     def get_target_data(target_name):
         entries = trials_by_target.get(target_name, [])
@@ -487,12 +399,77 @@ def analyze_cruby_matrix(trials_by_target, endpoint):
         },
     }
 
+
+
+def _repeated_matrix(grouped, endpoint, single, jit_field, numerator_keys, shape_pairs, profile=None):
+    contract = profile or {"slo_p99_ms": 100, "max_error_rate": 0.001, "measurement_seconds": 120}
+    import capacity
+    reps = sorted({r['trial']['repetition'] for rows in grouped.values() for r in rows
+                   if r['trial'].get('endpoint') == endpoint and r['trial'].get('repetition') is not None})
+    matrices = [single({name: [r for r in rows if r['trial'].get('repetition') == rep]
+                        for name, rows in grouped.items()}, endpoint) for rep in reps]
+    base = single({}, endpoint)
+    base['per_repetition'] = [{'repetition': rep, 'cells': m['cells']} for rep, m in zip(reps, matrices)]
+    for key, empty in base['cells'].items():
+        cells = [m['cells'][key] for m in matrices]
+        observed = [c for c in cells if c.get('status') == 'passed' and c.get('rps') is not None]
+        cell = dict(empty)
+        # Do not display one repetition's compiler/GC/resource probe as the
+        # aggregate. Keep only uniform identity fields; full probes are above.
+        for field in cell:
+            values = [c.get(field) for c in observed]
+            if values and all(value == values[0] for value in values):
+                cell[field] = values[0]
+            elif field not in ('target', 'rps'):
+                cell[field] = {} if isinstance(cell[field], dict) else ([] if isinstance(cell[field], list) else None)
+        cell['rps'] = statistics.median(c['rps'] for c in observed) if observed else None
+        cell['observed_repetitions'] = len(observed)
+        cell['planned_repetitions'] = len(reps)
+        cell['metric'] = 'median of passed per-trial observations; see every repetition'
+        base['cells'][key] = cell
+    valid = []
+    for name, records in grouped.items():
+        for r in records:
+            t = r['trial']; m = t.get('measurement', {})
+            if (t.get('endpoint') == endpoint and t.get('status') == 'passed'
+                    and t.get('capacity_rps') and t.get('repetition') is not None
+                    and m.get('driver') == 'k6-open-arrival' and m.get('elapsed', 0) >= contract.get('measurement_seconds', 120)
+                    and capacity.decision(m, contract) == 'pass'):
+                valid.append(t)
+    pairs = {}
+    for label, a, b in numerator_keys + shape_pairs:
+        pairs[label] = capacity.paired_ratios(valid, a, b)
+    base[jit_field] = {label: pairs[label]['median'] for label, _, _ in numerator_keys}
+    base['roundhouse_speedup'] = {label: pairs[label]['median'] for label, _, _ in shape_pairs}
+    left, right = (pairs[label]['pairs'] for label, _, _ in numerator_keys)
+    lmap = {p['repetition']: p['ratio'] for p in left}
+    rmap = {p['repetition']: p['ratio'] for p in right}
+    interactions = [rmap[rep]/lmap[rep] for rep in sorted(lmap.keys() & rmap.keys())]
+    base[jit_field]['interaction_ratio'] = statistics.median(interactions) if interactions else None
+    base['paired_capacity_evidence'] = pairs
+    if 'jvm_jit_verified_active_across_all' in base:
+        base['jvm_jit_verified_active_across_all'] = bool(matrices) and all(m['jvm_jit_verified_active_across_all'] for m in matrices)
+    return base
+
+
+def analyze_jruby_matrix(grouped, endpoint, profile=None):
+    return _repeated_matrix(grouped, endpoint, _single_jruby_matrix, 'jruby_speedup_g',
+        [('rails', 'rails-jruby', 'rails-jruby-off'), ('emitted', 'emit-jruby', 'emit-jruby-off')],
+        [('jruby_compile_off', 'emit-jruby-off', 'rails-jruby-off'), ('jruby_compile_jit', 'emit-jruby', 'rails-jruby')], profile)
+
+
+def analyze_cruby_matrix(grouped, endpoint, profile=None):
+    return _repeated_matrix(grouped, endpoint, _single_cruby_matrix, 'yjit_speedup_g',
+        [('rails', 'rails-cruby-yjit', 'rails-cruby-off'), ('emitted', 'emit-cruby-yjit', 'emit-cruby-off')],
+        [('yjit_off', 'emit-cruby-off', 'rails-cruby-off'), ('yjit_on', 'emit-cruby-yjit', 'rails-cruby-yjit')], profile)
+
+
 def generate_diagnostic_markdown(data):
     """Generate Markdown report for diagnostics with alerts and epistemological groupings."""
     lines = []
     lines.append('# Benchmark P1 JIT Runtime Diagnostics Report\n')
     lines.append('> [!WARNING]')
-    lines.append('> **Instrumentation Overhead Active**: This diagnostic run was executed with diagnostic flags enabled (`--yjit-stats`, `-Xjit.logging=true`, `-J-Xlog:gc`, `-J-XX:+PrintCompilation`, and periodic MXBean sampling).')
+    lines.append(f"> **Instrumentation Overhead Active**: diagnostics configured = {data.get('profile', {}).get('diagnostics', False)}. Verify actual flags in runtime artifacts; instrumented and uninstrumented runs are separate cohorts.")
     lines.append('> These instrumentation probes incur non-trivial CPU and memory overhead.')
     lines.append('> **DO NOT** mix diagnostic throughput / latency figures with production baseline benchmark rankings from `quick.yml` or `full.yml`.\n')
     if data.get('fixed_offered_rate'):
@@ -500,7 +477,7 @@ def generate_diagnostic_markdown(data):
 
     lines.append('> [!IMPORTANT]')
     lines.append('> **JRuby compile.mode=OFF vs JVM JIT**: `compile.mode=OFF` only instructs JRuby to interpret its IR/AST rather than emitting Java bytecode.')
-    lines.append('> The underlying host JVM (HotSpot C1/C2 JIT) remains **fully active** in all JRuby runs, as verified via JVM `CompilationMXBean`.\n')
+    lines.append('> Check runtime/JVM evidence per trial; compile.mode=OFF does not by itself disable HotSpot JIT. Missing compiler evidence remains unknown.\n')
 
     # 1. JRuby 2x2 Matrix
     lines.append('## 1. JRuby Compile Mode 2x2 Matrix & Interactions\n')
@@ -508,7 +485,7 @@ def generate_diagnostic_markdown(data):
         ep = jm['endpoint']
         c = jm['cells']
         lines.append(f'### Endpoint: `{ep}`\n')
-        lines.append('| Shape | JRuby compile.mode=OFF (JVM JIT Active) | JRuby compile.mode=JIT (JVM JIT Active) | Speedup Factor $G_{{JRuby}}$ ($JIT / OFF$) |')
+        lines.append('| Shape | JRuby compile.mode=OFF | JRuby compile.mode=JIT | Speedup Factor $G_{{JRuby}}$ ($JIT / OFF$) |')
         lines.append('| --- | --- | --- | --- |')
 
         r_off_str = f"{c['rails_off']['rps']} RPS" if c['rails_off']['rps'] else '-'
@@ -571,7 +548,7 @@ def generate_diagnostic_markdown(data):
         for key in ('rails_off', 'rails_yjit', 'emitted_off', 'emitted_yjit'):
             cell = c[key]
             tname = cell.get('target', key)
-            y_en = 'Yes' if cell.get('yjit_enabled') else 'No'
+            y_en = 'Unknown' if cell.get('yjit_enabled') is None else ('Yes' if cell['yjit_enabled'] else 'No')
             ystat = cell.get('yjit_stats') or {}
             c_blocks = ystat.get('compiled_block_count', '-')
             inv = ystat.get('invalidation_count', '-')
@@ -607,14 +584,11 @@ def generate_diagnostic_markdown(data):
     lines.append('## 4. Epistemological Classification (観測の分類と解釈)\n')
 
     lines.append('### A. 実測事実 (Observed Facts)')
-    lines.append('- **JRuby JVM Compiler Active**: Across all JRuby executions (`rails-jruby`, `emit-jruby`, `rails-jruby-off`, `emit-jruby-off`), the JVM `CompilationMXBean` confirmed an active HotSpot compiler with accumulated compilation CPU time.')
-    lines.append('- **Deterministic Mode Configuration**: `rails-jruby-off` and `emit-jruby-off` verified `compile_mode: OFF`, while `rails-jruby` and `emit-jruby` verified `compile_mode: JIT`.')
-    lines.append('- **YJIT Verification**: CRuby YJIT targets verified `RubyVM::YJIT.enabled? == true`, while OFF targets verified `false`.')
+    lines.append('- Runtime/JIT identity must be verified in each repetition’s artifacts; missing probes are unknown.')
+    lines.append('- Matrix RPS is the median of passed observations. See `diagnostics.json` → `per_repetition` for every trial and `paired_capacity_evidence` for eligible pairs.')
     lines.append('')
-
     lines.append('### B. 説明を支持する観測 (Supporting Observations)')
-    lines.append('- **Reduced Allocation Pressure**: Emitted code demonstrates a distinct reduction in total object allocations compared to Rails baseline, corroborating that template/route precompilation bypasses dynamic object instantiation.')
-    lines.append('- **Warmup Trajectory**: JRuby requires longer warmup duration to reach statistical stability (low CV/drift) than CRuby, consistent with multi-tiered JVM JIT warmup characteristics.')
+    lines.append('- Allocation and warmup differences require aligned intervals, repeated evidence and explicit instrumentation flags; this report does not assert their cause.')
     lines.append('')
 
     lines.append('### C. 未検証の仮説 (Unverified Hypotheses)')
@@ -628,111 +602,55 @@ def generate_diagnostic_markdown(data):
     return '\n'.join(lines) + '\n'
 
 def generate_failure_diagnosis_markdown(failure_diagnoses):
-    """Generate Markdown section for Issue #54 and #55 runtime failure diagnostics."""
     if not failure_diagnoses:
         return []
-
-    lines = []
-    lines.append('## 5. Runtime Failure Diagnosis and Viable Load Envelopes (Issues #54 & #55)\n')
-    lines.append('> [!IMPORTANT]')
-    lines.append('> **Root Cause Identification & Viable Envelope Summary**:')
-    lines.append('> - **Roundhouse `emit-jruby-off` (#55)**: 134/134 warmup windows failed (93.43% failure rate, p99 ~ 5,000ms). The 4 vCPU allocation was 100% pinned (99.9% user-mode CPU in JRuby AST/IR interpreter `InterpreterEngine`). Single-request service time is ~1,450ms. Under 32 concurrent closed-loop VUs on 4 Puma threads, estimated queue delay is ~10.15s, which mechanically exceeds the 5,000ms request timeout. Viable load envelope is <= 2-4 VUs and <= 2 RPS. Because service time exceeds the 100ms SLO contract by 14.5x, this configuration is **unsupported** for production capacity comparison.')
-    lines.append('> - **Spinel (#54)**: 150/150 warmup windows experienced tail timeouts (2.26% failure rate, ~60-70 timeouts per 30s window). Spinel executes coroutines across 4 OS workers; under 32 concurrent VUs with in-memory slicing of 1,000 articles, the 8:1 VU-to-worker ratio causes transient tail queue contention behind synchronous SQLite calls (`busy_timeout: 5000ms`). Median latency is healthy (~93ms, ~100 RPS), and container memory is remarkably compact (~64 MiB). Viable load envelope is <= 16 VUs and <= 40-50 RPS where errors are 0.0%.\n')
-
-    lines.append('### Failure Taxonomy across All Repetitions')
-    lines.append('| Target | Reps | Windows (Total/Failed) | Requests (Total/Failed) | Error Rate % | Timeout Failures (>5s) | HTTP Status Failures | Client Saturation |')
-    lines.append('| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |')
-    for tname, d in sorted(failure_diagnoses.items()):
-        tax = d['taxonomy']
-        lines.append(
-            f"| `{tname}` | {d['repetitions']} | {tax['total_windows']} / {tax['failed_windows']} ({tax['failed_windows_pct']}%) | "
-            f"{tax['total_requests']} / {tax['failed_requests']} | {tax['error_rate_pct']}% | "
-            f"{tax['timeout_failures']} | {tax['http_failures']} | {tax['client_saturated_windows']} windows |"
-        )
-    lines.append('')
-
-    lines.append('### Concurrency, Queue Dynamics & CPU Profile')
-    lines.append('| Target | Peak VUs | Workers/Threads | Est. Service Time | Max Theor. RPS | Obs. RPS | Est. Queue Delay | Active vCPUs | User CPU % |')
-    lines.append('| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |')
-    for tname, d in sorted(failure_diagnoses.items()):
-        q = d['queuing']
-        cpu = q.get('cpu_metrics', {})
-        vcpus = cpu.get('vcpus_active', '-')
-        user_pct = f"{cpu.get('pct_user', '-')}%" if cpu.get('pct_user') is not None else '-'
-        lines.append(
-            f"| `{tname}` | {q.get('concurrency_vus', '-')} | {q.get('threads', '-')} | "
-            f"{q.get('estimated_service_time_ms', '-')} ms | {q.get('max_theoretical_throughput_rps', '-')} | "
-            f"{q.get('observed_successful_rps', '-')} | {q.get('estimated_queue_delay_ms', '-')} ms | "
-            f"{vcpus} | {user_pct} |"
-        )
-    lines.append('')
-
-    lines.append('### Viable Load Envelopes & Supported Status')
-    lines.append('| Target | Status | Safe Concurrency (VUs) | Safe Arrival Rate (RPS) | SLO Achievable (100ms)? | Operational Constraint |')
-    lines.append('| --- | --- | ---: | ---: | --- | --- |')
-    for tname, d in sorted(failure_diagnoses.items()):
+    lines = ['## 5. Runtime Failure Diagnosis and Viable Load Envelopes (Issues #54 & #55)', '',
+             'Root causes remain unresolved without CPU/wait traces. Historic counters without explicit failure categories are unknown.', '',
+             '| Target | Reps | Windows total/failed | Requests total/failed | Error % | Explicit timeouts | Unknown failures |',
+             '| --- | ---: | ---: | ---: | ---: | ---: | ---: |']
+    for name, d in sorted(failure_diagnoses.items()):
+        t = d['taxonomy']
+        lines.append(f"| `{name}` | {d['repetitions']} | {t['total_windows']}/{t['failed_windows']} | {t['total_requests']}/{t['failed_requests']} | {t['error_rate_pct']} | {t['timeout_failures']} | {t['unknown_failures']} |")
+    lines += ['', '### Confirmed points (no inferred safe operating ranges)', '']
+    for name, d in sorted(failure_diagnoses.items()):
         env = d['viable_envelope']
-        slo_str = '✅ Yes' if env['slo_achievable'] else '❌ No'
-        lines.append(
-            f"| `{tname}` | `{env['status']}` | <= {env['max_viable_concurrency_vus_no_timeout']} | "
-            f"<= {env['safe_open_arrival_rps']} | {slo_str} | {env['notes']} |"
-        )
-    lines.append('')
-
-    lines.append('### Epistemological Verification Notes')
-    lines.append('- **Startup Warning Distinction**: The startup warning `java.lang.RuntimeException: getprotobyname_r failed` appears identically in `rails-jruby`, `rails-jruby-off`, and `emit-jruby` as well. It is an innocuous `jnr-netdb` Linux lookup fallback in containerized environments and is uncorrelated with runtime request failures.')
-    lines.append('- **JIT ON vs OFF Disparity**: In `emit-jruby` with JIT active, the transpiled Ruby code compiles to Java bytecode and HotSpot C2 machine code, reaching ~72.7 RPS and 0 errors. In `emit-jruby-off`, JRuby executes the same logic via AST/IR interpretation, multiplying per-request CPU instructions by orders of magnitude.')
-    lines.append('- **Spinel Memory vs Capacity Separation**: Spinel operates at ~64 MiB peak memory (~1/10th of Ruby runtime heaps) and achieves 100+ RPS sustained throughput, but requires concurrency <= 16 VUs or rate <= 40-50 RPS to eliminate tail queue latency excursions.')
-    lines.append('')
-
+        points = ', '.join(f"{p['offered_rps']} RPS / {p['elapsed_seconds']:.1f}s / p99 {p['p99_ms']:.2f}ms" for p in env['confirmed_points'])
+        lines.append(f"- `{name}`: {points or 'unconfirmed'}; root cause unresolved.")
+        for rep in d['per_repetition']:
+            lines.append(f"  - rep {rep['repetition']}: {rep['status']}; CPU interval metrics {rep['queuing']['cpu_metrics']}; missing {rep['missing']}")
+    lines += ['', 'Shared startup warnings do not establish causation. Collect low-load sweeps, CPU/wait traces, SQL and GC evidence before interpreting mechanisms.', '']
     return lines
 
+
 def analyze_runtime_failures(output_dir):
-    """Aggregate failure taxonomy, queuing dynamics, and viable load envelopes across trials."""
     root = Path(output_dir)
-    checks, trial_rows, trials_details, plan = parse_diagnostic_artifacts(root)
+    checks, trial_rows, details, plan = parse_diagnostic_artifacts(root)
     profile = plan.get('profile', {})
-    threads = profile.get('threads', 4)
-    slo_p99 = profile.get('slo_p99_ms', 100.0)
-    timeout_ms = profile.get('request_timeout', 5) * 1000.0
-
-    by_target = {}
-    for d in trials_details:
-        tname = d.get('trial', {}).get('target')
-        if tname:
-            by_target.setdefault(tname, []).append(d)
-
+    grouped = {}
+    for r in details:
+        grouped.setdefault(r['trial'].get('target', 'unknown'), []).append(r)
     diagnoses = {}
-    for tname, records in by_target.items():
-        all_windows = []
-        cpu_starts = []
-        cpu_ends = []
+    for target, records in grouped.items():
+        per_rep = []
+        windows = []
+        observations = []
         for r in records:
-            w_list = r.get('warmup', [])
-            all_windows.extend(w_list)
-            if 'cpu_start' in r:
-                cpu_starts.append(r['cpu_start'])
-            if 'cpu_end' in r:
-                cpu_ends.append(r['cpu_end'])
-
-        c_start = cpu_starts[0] if cpu_starts else None
-        c_end = cpu_ends[-1] if cpu_ends else None
-
-        taxonomy = analyze_failure_taxonomy(all_windows)
-        num_t = profile.get('spinel_workers', threads) if 'spinel' in tname else threads
-        queuing = analyze_concurrency_and_queuing(all_windows, c_start, c_end, num_threads=num_t, target_name=tname)
-        svc_time = queuing.get('estimated_service_time_ms', 0.0)
-        envelope = compute_viable_load_envelope(tname, svc_time, num_threads=num_t, slo_p99_ms=slo_p99, timeout_ms=timeout_ms)
-
-        diagnoses[tname] = {
-            'target': tname,
-            'repetitions': len(records),
-            'taxonomy': taxonomy,
-            'queuing': queuing,
-            'viable_envelope': envelope,
-        }
-
+            t = r['trial']
+            w = r.get('warmup', [])
+            windows.extend(w)
+            if t.get('status') == 'passed' and t.get('measurement'):
+                observations.append(t['measurement'])
+            q = analyze_concurrency_and_queuing(w, r.get('cpu_start'), r.get('cpu_end'),
+                profile.get('spinel_workers', 4) if target == 'spinel' else profile.get('threads', 4), target)
+            per_rep.append({'repetition': t.get('repetition'), 'status': t.get('status'),
+                            'taxonomy': analyze_failure_taxonomy(w), 'queuing': q,
+                            'missing': r.get('missing', [])})
+        diagnoses[target] = {'target': target, 'repetitions': len(records),
+            'taxonomy': analyze_failure_taxonomy(windows), 'per_repetition': per_rep,
+            'viable_envelope': compute_viable_load_envelope(target,
+                observations=observations, profile=profile, slo_p99_ms=profile.get('slo_p99_ms', 100))}
     return diagnoses
+
 
 def build_diagnostic_report(output_dir):
     """Entrypoint to parse benchmark output and generate diagnostics.json and diagnostics.md."""
@@ -755,9 +673,9 @@ def build_diagnostic_report(output_dir):
     jruby_matrices = []
     cruby_matrices = []
     for ep in endpoints:
-        jruby_matrices.append(analyze_jruby_matrix(by_target, ep))
-        cruby_matrices.append(analyze_cruby_matrix(by_target, ep))
-    fixed_offered_rate = profile.get('driver') == 'k6'
+        jruby_matrices.append(analyze_jruby_matrix(by_target, ep, profile))
+        cruby_matrices.append(analyze_cruby_matrix(by_target, ep, profile))
+    fixed_offered_rate = profile.get('driver') == 'k6' and not profile.get('capacity_search')
     if fixed_offered_rate:
         for matrix in jruby_matrices + cruby_matrices:
             for field in ('jruby_speedup_g', 'yjit_speedup_g', 'roundhouse_speedup'):
@@ -773,7 +691,7 @@ def build_diagnostic_report(output_dir):
         warmup_trajectories.append({
             'target': t.get('target', 'unknown'),
             'endpoint': t.get('endpoint', 'unknown'),
-            'repetition': t.get('repetition', 1),
+            'repetition': t.get('repetition'),
             'status': t.get('status', 'unknown'),
             'warmup_analysis': warmup_analysis,
         })
@@ -782,7 +700,7 @@ def build_diagnostic_report(output_dir):
     failure_diagnoses = analyze_runtime_failures(output_dir)
 
     data = {
-        'schema_version': 1,
+        'schema_version': 2,
         'fixed_offered_rate': fixed_offered_rate,
         'profile': profile,
         'endpoints': endpoints,

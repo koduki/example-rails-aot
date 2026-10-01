@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import shutil
+import shlex
 import subprocess
 import sys
 import time
@@ -122,6 +123,19 @@ def verify_artifact_checksums(directory):
     if not dir_path.is_dir():
         raise FileNotFoundError(f"Artifact directory does not exist: {directory}")
 
+    # Verify received manifest before producing a new local manifest. Never
+    # overwrite the source hashes and call recomputation verification.
+    manifest = dir_path / 'SHA256SUMS'
+    if manifest.exists():
+        for line in manifest.read_text(encoding='utf-8').splitlines():
+            digest, separator, name = line.partition('  ')
+            path = dir_path / name
+            if (not separator or len(digest) != 64 or not name
+                    or path.is_symlink() or not path.resolve().is_relative_to(dir_path.resolve())):
+                raise ValueError(f'Unsafe or malformed checksum entry: {line}')
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                raise ValueError(f'Checksum mismatch or missing file: {name}')
+
     checksums = {}
     total_files = 0
     total_bytes = 0
@@ -132,6 +146,8 @@ def verify_artifact_checksums(directory):
                 continue
             file_path = Path(root) / file_name
             rel_path = file_path.relative_to(dir_path).as_posix()
+            if file_path.is_symlink():
+                raise ValueError(f'Symlink artifact rejected: {rel_path}')
             content = None
             for attempt in range(5):
                 try:
@@ -148,6 +164,10 @@ def verify_artifact_checksums(directory):
 
     if total_files == 0:
         raise ValueError(f"No artifact files found in {directory}")
+
+    for name in ('plan.json', 'env.json', 'trials/per-run.json'):
+        if (dir_path / name).exists():
+            json.loads((dir_path / name).read_text(encoding='utf-8'))
 
     # Write SHA256SUMS file
     sums_file = dir_path / 'SHA256SUMS'
@@ -166,6 +186,7 @@ def verify_artifact_checksums(directory):
         'total_bytes': total_bytes,
         'checksums': checksums,
         'manifest_path': str(sums_file),
+        'missing_required_files': missing,
     }
 
 
@@ -179,7 +200,7 @@ def disk_lifecycle_guidance(tf_dir=None, auto_destroy=False):
         "======================================================================\n"
         "  PERSISTENT DISK COST CONTROL NOTICE\n"
         "======================================================================\n"
-        "  Both VMs are now TERMINATED to prevent compute charges.\n"
+        "  Check cleanup.json for verified TERMINATED state of both VMs.\n"
         "  HOWEVER, SSD persistent disks continue to incur hourly storage fees\n"
         "  until destroyed via Terraform.\n"
         "\n"
@@ -214,6 +235,8 @@ def run_suite(args):
     verification_passed = False
     workflow_error = None
 
+    if output_dir.exists() and any(output_dir.iterdir()):
+        raise ValueError('Output directory must be empty to avoid nested SCP artifacts')
     try:
         # Step 1: Verify and start VMs
         print(f"[1/6] Verifying and starting VMs ({app_vm}, {loadgen_vm})...", flush=True)
@@ -231,16 +254,19 @@ def run_suite(args):
                 remote_repo = "$HOME/example-rails-aot"
         remote_output = f"bench-results/{run_id}"
 
+        source_ref = shlex.quote(getattr(args, 'source_ref', 'main'))
         # Step 1.5: Sync git repository on app VM
         print(f"      Syncing latest code on {app_vm}...", flush=True)
         sync_cmd = (
             f"if [ -d \"{remote_repo}/.git\" ]; then "
-            f"  cd \"{remote_repo}\" && git fetch origin && git checkout main && git pull --ff-only origin main; "
+            f"  cd \"{remote_repo}\" && git diff --quiet && git diff --cached --quiet && git fetch origin {source_ref} && git checkout --detach FETCH_HEAD; "
             f"else "
-            f"  git clone https://github.com/koduki/example-rails-aot.git \"{remote_repo}\" && cd \"{remote_repo}\" && git checkout main; "
+            f"  git clone https://github.com/koduki/example-rails-aot.git \"{remote_repo}\" && cd \"{remote_repo}\" && git fetch origin {source_ref} && git checkout --detach FETCH_HEAD; "
             f"fi"
         )
         ssh_command(app_vm, project, zone, sync_cmd, timeout=300)
+
+        source_sha = ssh_command(app_vm, project, zone, f'cd {remote_repo} && git rev-parse HEAD', timeout=30)
 
         # Step 2: Build container images if requested
         if not args.skip_build:
@@ -293,12 +319,22 @@ def run_suite(args):
         print(f"[5/6] Downloading artifacts from {app_vm}:{remote_output} to {output_dir}...", flush=True)
         scp_download(app_vm, project, zone, f"{remote_repo}/{remote_output}", str(output_dir))
         artifacts_recovered = True
+        (output_dir / 'execution.json').write_text(json.dumps({
+            'source_ref': getattr(args, 'source_ref', 'main'), 'source_sha': source_sha,
+            'run_id': run_id, 'project': project, 'zone': zone,
+            'skip_build': args.skip_build, 'skip_preflight': args.skip_preflight,
+        }, indent=2) + '\n', encoding='utf-8')
 
         # Step 6: Verify checksums
         print(f"[6/6] Verifying artifact checksums...", flush=True)
         verification_result = verify_artifact_checksums(output_dir)
         print(f"      Verified {verification_result['total_files']} files ({verification_result['total_bytes'] / 1048576:.1f} MB).", flush=True)
         print(f"      Checksum manifest written to {verification_result['manifest_path']}", flush=True)
+        if verification_result['missing_required_files']:
+            raise ValueError('Incomplete artifact bundle: ' + ', '.join(verification_result['missing_required_files']))
+        downloaded_env = json.loads((output_dir / 'env.json').read_text(encoding='utf-8'))
+        if downloaded_env.get('git_commit') != source_sha:
+            raise ValueError('Downloaded measured commit differs from fetched execution commit')
         verification_passed = True
 
     except KeyboardInterrupt:
@@ -310,13 +346,33 @@ def run_suite(args):
     finally:
         # Guarantee VM shutdown in finally block
         print("\n[FINALLY] Stopping both instances to prevent ongoing compute charges...", flush=True)
-        stop_results = gce_cleanup.stop_instances(project, zone, (app_vm, loadgen_vm), wait_seconds=args.wait_seconds)
-        print(json.dumps(stop_results, indent=2), flush=True)
+        cleanup_started = time.time()
+        try:
+            stop_results = gce_cleanup.stop_instances(project, zone, (app_vm, loadgen_vm), wait_seconds=args.wait_seconds)
+        except Exception as error:
+            stop_results = {name: {'stopped': False, 'error': str(error)} for name in (app_vm, loadgen_vm)}
+        all_stopped = all(stop_results.get(name, {}).get('stopped')
+                          and stop_results[name].get('status') == 'TERMINATED'
+                          for name in (app_vm, loadgen_vm))
+        record = {'schema_version': 1, 'project': project, 'zone': zone, 'run_id': run_id,
+                  'started_at': cleanup_started, 'finished_at': time.time(),
+                  'artifacts_recovered': artifacts_recovered,
+                  'artifact_verification_passed': verification_passed,
+                  'workflow_error': str(workflow_error) if workflow_error else None,
+                  'instances': stop_results, 'all_stopped': all_stopped}
+        print(json.dumps(record, indent=2), flush=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / 'cleanup.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+        if verification_passed:
+            try:
+                verify_artifact_checksums(output_dir)  # Include the local stop evidence.
+            except Exception as error:
+                workflow_error = error
+        disk_lifecycle_guidance(tf_dir=args.terraform_dir,
+                                auto_destroy=(args.auto_destroy and verification_passed
+                                              and all_stopped and not workflow_error))
 
-        # Always offer disk lifecycle guidance
-        disk_lifecycle_guidance(tf_dir=args.terraform_dir, auto_destroy=(args.auto_destroy and verification_passed))
-
-    return 0 if (verification_passed and not workflow_error) else 1
+    return 0 if (verification_passed and all_stopped and not workflow_error) else 1
 
 
 def main(argv=None):
@@ -327,6 +383,7 @@ def main(argv=None):
     parser.add_argument('--loadgen-instance', default='bench-loadgen-c3', help='Load generator VM instance name')
     parser.add_argument('--ssh-user', help='Optional SSH username on remote VMs')
     parser.add_argument('--profile', default='bench/profiles/gce-c3-capacity.yml', help='Benchmark profile path')
+    parser.add_argument('--source-ref', default='main', help='Fetched branch, tag or commit; exact resulting SHA recorded')
     parser.add_argument('--run-id', help='Identifier for this benchmark run')
     parser.add_argument('--output-dir', help='Local directory to download artifacts to')
     parser.add_argument('--terraform-dir', help='Path to infra/terraform directory')

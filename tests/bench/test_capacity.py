@@ -64,15 +64,15 @@ class CapacityTests(unittest.TestCase):
         self.assertIn('downward', phases)
         self.assertEqual(phases[-1], 'confirm')
 
-    def test_downward_search_recovers_when_start_rate_causes_client_saturation(self):
+    def test_start_saturation_aborts_without_inventing_sut_bound(self):
         profile = dict(self.profile, capacity_start_rps=100, capacity_min_rps=25, capacity_tolerance_rps=25)
         def measure(rate, duration, phase):
             if rate == 100:
                 return self.result(rate, client_saturated=True, iterations_dropped=10)
             return self.result(rate, p99=120 if rate >= 50 else 20)
-        result = capacity.search(measure, profile)
-        self.assertEqual(result['status'], 'pass')
-        self.assertEqual(result['capacity_rps'], 25)
+        with self.assertRaisesRegex(RuntimeError, 'cause unresolved') as caught:
+            capacity.search(measure, profile)
+        self.assertEqual(len(caught.exception.steps), 1)
 
     def test_downward_search_fails_when_even_min_rps_fails(self):
         profile = dict(self.profile, capacity_start_rps=100, capacity_min_rps=25)
@@ -175,9 +175,11 @@ class CapacityTests(unittest.TestCase):
             return self.result(rate, p99=20)  # passes
         result = capacity.search(measure, profile)
         self.assertEqual(result['status'], 'pass')
-        self.assertEqual(result['capacity_rps'], 50)
+        self.assertEqual(result['capacity_rps'], 75)
+        self.assertEqual(result['failed_upper_rps'], 100)
+        self.assertEqual(result['resolution_rps'], 25)
         confirm_rates = [s['rate'] for s in result['steps'] if s['phase'] == 'confirm']
-        self.assertEqual(confirm_rates, [100, 50])
+        self.assertEqual(confirm_rates, [100, 50, 75])
 
     def test_corrupted_response_detected_and_rejected(self):
         # HTTP 200 with missing/corrupted body fails response integrity check.

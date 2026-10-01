@@ -1,11 +1,12 @@
 """Bounded capacity search with explicit SLO and client validity decisions."""
 import statistics
+import math
 
 
 def classify(measurement, profile):
     """Classify measurement into:
     - 'slo_pass': meets all latency, error rate, throughput, client, and integrity SLOs
-    - 'sut_slo_fail': SUT failed SLO (latency, errors, timeouts, or SUT saturation causing client queue exhaustion)
+    - 'sut_slo_fail': SUT failed SLO (latency, errors, timeouts, or integrity)
     - 'loadgen_invalid': tester deficiency (high tester CPU >= max, network errors, misconfigured loadgen)
     - 'transport_or_artifact_error': artifact transport / transfer failure
     - 'unclassified': cannot be classified
@@ -26,6 +27,9 @@ def classify(measurement, profile):
 
     if measurement.get('transport_error'):
         return {'category': 'transport_or_artifact_error', 'reason': 'Remote artifact transfer failure'}
+
+    if not isinstance(p99, (int, float)) or not math.isfinite(p99) or (total > 0 and p99 <= 0):
+        return {'category': 'unclassified', 'reason': 'Missing/invalid p99 latency evidence'}
 
     # 1. Tester / loadgen errors:
     if net_errors > 0:
@@ -48,14 +52,9 @@ def classify(measurement, profile):
         return {'category': 'sut_slo_fail', 'reason': f'p99 latency exceeded SLO: {p99} ms > {profile["slo_p99_ms"]} ms'}
 
     # 4. Client saturation / dropped iterations / throughput deficit:
-    # Distinguish whether caused by SUT delay vs under-provisioned load generator.
+    # Incomplete issuance alone cannot distinguish SUT delay from client limits.
     if saturated or dropped > 0 or (offered and rps_succ < 0.95 * offered):
-        # If server was slow (p99 > SLO / 2) or had failed requests:
-        # SUT couldn't respond in time, causing k6 virtual users to accumulate and saturate.
-        if (p99 is not None and p99 >= 0.5 * profile['slo_p99_ms']) or failed > 0:
-            return {'category': 'sut_slo_fail', 'reason': f'SUT saturation caused client queue exhaustion (p99={p99}ms, failed={failed})'}
-        # SUT responded with low latency and 0 errors, but client still saturated / dropped:
-        return {'category': 'loadgen_invalid', 'reason': 'Load generator dropped iterations or saturated VUs despite low server latency'}
+        return {'category': 'loadgen_invalid', 'reason': 'Incomplete issuance or VU saturation; cause unresolved without server/client traces'}
 
     if not total:
         return {'category': 'unclassified', 'reason': 'Zero total requests with no error indicators'}
@@ -78,118 +77,129 @@ def decision(measurement, profile):
 
 
 def search(measure, profile):
-    """measure(rate, duration, phase) -> k6 summary. Confirm the final candidate."""
+    """Screen, confirm, then refine a bounded interval; retain every probe."""
     steps = []
-    min_rps = profile.get('capacity_min_rps')
-    start_rps = profile['capacity_start_rps']
+    minimum = profile.get('capacity_min_rps', profile['capacity_start_rps'])
+    maximum = profile['capacity_max_rps']
+    start = profile['capacity_start_rps']
+    confirmed = {}
+    high = None
+    high_seconds = None
+    max_steps = profile.get('capacity_max_steps', 80)
+
+    def tolerance(low):
+        absolute = profile['capacity_tolerance_rps']
+        relative = profile.get('capacity_tolerance_ratio')
+        return min(absolute, low * relative) if relative else absolute
+
+    def abort(message):
+        error = RuntimeError(message)
+        error.steps = list(steps)
+        raise error
 
     def probe(rate, duration, phase):
-        m = measure(rate, duration, phase)
-        cls_info = classify(m, profile)
+        if len(steps) >= max_steps:
+            abort('Capacity search budget exhausted; retain confirmed lower bounds in steps')
+        rate = round(rate, 3)
+        try:
+            m = measure(rate, duration, phase)
+        except Exception as error:
+            error.steps = list(steps)
+            raise
+        info = classify(m, profile)
         state = decision(m, profile)
-        steps.append({'phase': phase, 'rate': rate, 'decision': state,
-                      'classification': cls_info['category'], 'reason': cls_info['reason'],
-                      'measurement': m})
-        if cls_info['category'] == 'loadgen_invalid':
-            # Load generator / tester failed: cannot infer server capacity from a broken tester!
-            if phase == 'coarse' and rate == start_rps and min_rps and min_rps < rate:
-                return state
-            err = RuntimeError(f'Client saturation at {rate} RPS invalidates capacity search: {cls_info["reason"]}')
-            err.steps = list(steps)
-            raise err
-        return state
+        steps.append({'phase': phase, 'rate': rate, 'duration_seconds': duration,
+                      'decision': state, 'classification': info['category'],
+                      'reason': info['reason'], 'measurement': m})
+        if state in ('invalid_client', 'transport_error', 'unclassified'):
+            abort(f'Client saturation or invalid measurement at {rate} RPS: {info["reason"]}')
+        return state, m
 
-    low, high = 0, None
-    rate = start_rps
-    while rate <= profile['capacity_max_rps']:
-        state = probe(rate, profile['capacity_step_seconds'], 'coarse')
-        if state == 'pass':
-            low = rate
-            rate *= 2
-        else:
-            high = rate
+    # Short probes locate a candidate. Invalid clients never become SUT bounds.
+    low = None
+    rate = start
+    while rate <= maximum:
+        state, m = probe(rate, profile['capacity_step_seconds'], 'coarse')
+        if state != 'pass':
+            high, high_seconds = rate, profile['capacity_step_seconds']
             break
+        low = rate
+        if rate == maximum:
+            break
+        rate = min(maximum, rate * 2)
 
-    if high is None and low < profile['capacity_max_rps']:
-        cap = profile['capacity_max_rps']
-        if probe(cap, profile['capacity_step_seconds'], 'upper-bound') == 'pass':
-            low = cap
-        else:
-            high = cap
-
-    # If the starting rate failed, search downward
-    if low == 0 and min_rps and min_rps < start_rps:
-        down_rate = start_rps // 2
-        while down_rate >= min_rps:
-            state = probe(down_rate, profile['capacity_step_seconds'], 'downward')
+    if low is None:
+        rate = max(minimum, start / 2)
+        while True:
+            state, m = probe(rate, profile['capacity_step_seconds'], 'downward')
             if state == 'pass':
-                low = down_rate
+                low = rate
                 break
-            else:
-                high = down_rate
-                if state == 'invalid_client' and down_rate <= min_rps:
-                    err = RuntimeError(f'Client saturation at {down_rate} RPS invalidates capacity search')
-                    err.steps = list(steps)
-                    raise err
-                down_rate //= 2
+            high, high_seconds = rate, profile['capacity_step_seconds']
+            if rate == minimum:
+                abort('No sustainable starting rate; lower capacity_min_rps')
+            rate = max(minimum, round(rate / 2, 3))
 
-    if low == 0:
-        err = RuntimeError('No sustainable starting rate; lower capacity_start_rps')
-        err.steps = list(steps)
-        raise err
-
-    # Bracket search between low and high
-    if high is not None and low > 0:
-        while high - low > profile['capacity_tolerance_rps']:
-            mid = (low + high) // 2
-            if probe(mid, profile['capacity_step_seconds'], 'bracket') == 'pass':
+    if high is not None:
+        while high - low > tolerance(low):
+            mid = round((low + high) / 2, 3)
+            if mid in (low, high):
+                break
+            state, m = probe(mid, profile['capacity_step_seconds'], 'bracket')
+            if state == 'pass':
                 low = mid
             else:
-                high = mid
+                high, high_seconds = mid, profile['capacity_step_seconds']
 
-    if high is None:
-        return {'offered_rps': low, 'capacity_rps': None, 'steps': steps,
-                'measurement': steps[-1]['measurement'], 'status': 'upper_bound_not_found',
-                'classification': 'unclassified'}
-
-    # Confirmation with downward re-search on confirmation failure:
-    min_cand = profile.get('capacity_min_rps') or profile.get('capacity_tolerance_rps', 25)
-    tol = profile.get('capacity_tolerance_rps', 25)
+    # A failed sustained candidate tightens the upper bound. Halving only
+    # establishes a lower point; it must not terminate refinement.
     candidate = low
-
-    while candidate >= min_cand:
-        measured = measure(candidate, profile['measurement_seconds'], 'confirm')
-        state = decision(measured, profile)
-        cls_info = classify(measured, profile)
-        steps.append({'phase': 'confirm', 'rate': candidate, 'decision': state,
-                      'classification': cls_info['category'], 'reason': cls_info['reason'],
-                      'measurement': measured})
+    while not confirmed:
+        state, measured = probe(candidate, profile['measurement_seconds'], 'confirm')
         if state == 'pass':
-            return {'offered_rps': candidate, 'capacity_rps': measured.get('rps_successful'),
-                    'measurement': measured, 'steps': steps, 'status': 'pass',
-                    'classification': 'slo_pass'}
-
-        # Candidate failed sustained 120s confirmation! Re-search lower candidates.
-        next_cand = None
-        if candidate // 2 >= min_cand:
-            next_cand = candidate // 2
-        elif candidate - tol >= min_cand:
-            next_cand = candidate - tol
-
-        if next_cand is None or next_cand >= candidate:
+            confirmed[candidate] = measured
             break
+        high, high_seconds = candidate, profile['measurement_seconds']
+        if candidate == minimum:
+            return {'offered_rps': candidate, 'capacity_rps': None,
+                    'steps': steps, 'measurement': measured, 'status': 'slo_fail',
+                    'classification': 'sut_slo_fail', 'confirmed_lower_rps': None,
+                    'failed_upper_rps': high, 'failed_upper_seconds': high_seconds}
+        candidate = max(minimum, round(candidate / 2, 3))
 
-        # Probe the lower candidate before running 120s confirmation
-        probe_state = probe(next_cand, profile['capacity_step_seconds'], 'downward')
-        if probe_state != 'pass':
-            candidate = next_cand
-            continue
-        candidate = next_cand
+    low = max(confirmed)
+    if high is not None:
+        while high - low > tolerance(low):
+            mid = round((low + high) / 2, 3)
+            if mid in (low, high):
+                break
+            state, measured = probe(mid, profile['measurement_seconds'], 'confirm')
+            if state == 'pass':
+                low = mid
+                confirmed[low] = measured
+            else:
+                high, high_seconds = mid, profile['measurement_seconds']
 
-    last_step = steps[-1]
-    return {'offered_rps': low, 'capacity_rps': None, 'steps': steps,
-            'measurement': last_step['measurement'], 'status': last_step['decision'],
-            'classification': last_step.get('classification', 'sut_slo_fail')}
+    # End with the chosen point so its telemetry and measurement refer to
+    # the same interval. Reversal on this repeat is visible, never hidden.
+    if steps[-1]['rate'] != low or steps[-1]['decision'] != 'pass':
+        state, measured = probe(low, profile['measurement_seconds'], 'confirm')
+        if state != 'pass':
+            return {'offered_rps': low, 'capacity_rps': None, 'steps': steps,
+                    'measurement': measured, 'status': 'boundary_unstable',
+                    'classification': 'unclassified', 'confirmed_lower_rps': low,
+                    'failed_upper_rps': high, 'failed_upper_seconds': high_seconds}
+        confirmed[low] = measured
+    measured = confirmed[low]
+    return {'offered_rps': low, 'capacity_rps': measured.get('rps_successful') if high is not None else None,
+            'confirmed_successful_rps': measured.get('rps_successful'),
+            'confirmed_lower_rps': low, 'failed_upper_rps': high,
+            'failed_upper_seconds': high_seconds,
+            'resolution_rps': high - low if high is not None else None,
+            'tolerance_rps': tolerance(low),
+            'steps': steps, 'measurement': measured,
+            'status': 'pass' if high is not None else 'upper_bound_not_found',
+            'classification': 'slo_pass' if high is not None else 'unclassified'}
 
 
 def paired_ratios(trials, numerator, denominator):

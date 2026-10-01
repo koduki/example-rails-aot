@@ -81,6 +81,7 @@ class RunGceSuiteUnitTests(unittest.TestCase):
     def test_run_suite_failsafe_stops_vms_on_error(self):
         with tempfile.TemporaryDirectory() as temp:
             args = MagicMock()
+            args.source_ref = 'main'
             args.project = 'p'
             args.zone = 'z'
             args.app_instance = 'bench-app-c3'
@@ -108,8 +109,40 @@ class RunGceSuiteUnitTests(unittest.TestCase):
                  redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 ret = run_gce_suite.run_suite(args)
                 self.assertEqual(ret, 1)
+                cleanup = json.loads((Path(temp) / 'cleanup.json').read_text())
+                self.assertEqual(cleanup['workflow_error'], 'Benchmark crashed')
+                self.assertFalse(cleanup['artifacts_recovered'])
+                self.assertIn('started_at', cleanup)
                 self.assertEqual(len(stop_called), 1)
                 self.assertEqual(stop_called[0][2], ('bench-app-c3', 'bench-loadgen-c3'))
+
+    def test_suite_includes_stop_evidence_and_rejects_unverified_stop(self):
+        from types import SimpleNamespace
+        for stopped in (True, False):
+            with self.subTest(stopped=stopped), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp) / 'bundle'
+                args = SimpleNamespace(project='p', zone='z', app_instance='app', loadgen_instance='tester',
+                    run_id='test', output_dir=str(output), source_ref='source-sha', ssh_user='bench',
+                    wait_seconds=1, skip_build=True, skip_preflight=True, profile='profile.json',
+                    run_timeout=1, auto_destroy=False, terraform_dir=tmp)
+                def download(*_):
+                    output.mkdir(); (output / 'trials').mkdir()
+                    (output / 'plan.json').write_text('{}')
+                    (output / 'env.json').write_text('{"git_commit":"source-sha"}')
+                    (output / 'trials/per-run.json').write_text('[]')
+                outcomes = {name: {'stopped': stopped, 'status': 'TERMINATED' if stopped else 'RUNNING'}
+                            for name in ('app', 'tester')}
+                with patch.object(run_gce_suite, 'verify_and_start_vms'), \
+                     patch.object(run_gce_suite, 'get_internal_ip', return_value='10.0.0.1'), \
+                     patch.object(run_gce_suite, 'ssh_command', return_value='source-sha'), \
+                     patch.object(run_gce_suite, 'scp_download', side_effect=download), \
+                     patch.object(run_gce_suite.gce_cleanup, 'stop_instances', return_value=outcomes), \
+                     redirect_stdout(io.StringIO()):
+                    result = run_gce_suite.run_suite(args)
+                self.assertEqual(result, 0 if stopped else 1)
+                self.assertEqual(json.loads((output / 'cleanup.json').read_text())['all_stopped'], stopped)
+                self.assertIn('cleanup.json', (output / 'SHA256SUMS').read_text())
+                self.assertIn('execution.json', (output / 'SHA256SUMS').read_text())
 
     def test_resolve_gcloud(self):
         with patch('shutil.which', side_effect=lambda x: f'/bin/{x}' if x == 'gcloud.cmd' else None):
