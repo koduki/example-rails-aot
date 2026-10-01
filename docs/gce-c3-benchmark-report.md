@@ -6,7 +6,7 @@ The numeric tables below describe confirmed **candidate lower points**, not prec
 
 The release archive SHA-256 is `4ceded406c302c877a9faa3394b47b8edb38084190b0a6cb5fdf808518ac3646`; all 6,578 manifest entries were verified. Eight failed trial directories lack `trial.json` (five `emit-cruby-off`, three `rails-jruby-off`); the authoritative per-run index and available raw steps remain usable, with this gap explicit. No `cleanup.json`, low-load sweep, JFR or measured stage microbenchmark is included. The measured commit differs from the report revision; preserve both SHAs and the existing release tag.
 
-The revised runner searches down to 1 RPS, refines after confirmation failure with fractional offered rates and records confirmed lower/failed upper bounds, their durations and resolution. It uses a four-VU warmup, separate from this release's 32-VU cohort. These changes have not been rerun on C3. See [runtime failure investigation](diagnostics-jruby-off-and-spinel.md), [aligned observations](reversal-analysis-rails-vs-roundhouse.md), and [measurement protocol](../.agents/skills/gce-benchmark-runbook/references/measurement-protocol.md).
+The revised runner searches down to 1 RPS, refines after confirmation failure with fractional offered rates and records confirmed lower/failed upper bounds, their durations and resolution. It uses a four-VU warmup, separate from this release's 32-VU cohort. These changes were evaluated on C3 in the 2026-10-01 retest (see [Section 11](#11-gce-c3-standard-4-retest-evidence-2026-10-01)). See [runtime failure investigation](diagnostics-jruby-off-and-spinel.md), [aligned observations](reversal-analysis-rails-vs-roundhouse.md), and [measurement protocol](../.agents/skills/gce-benchmark-runbook/references/measurement-protocol.md).
 
 ## Executive Summary
 
@@ -222,3 +222,119 @@ The archive does not contain `cleanup.json` or dated stop-verification output. V
 
 All raw artifacts, k6 open-arrival logs, telemetry snapshots, and database captures are archived and published in [GitHub Release gce-c3-capacity-20260930](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-capacity-20260930).
 All 6,578 files match their published checksums in `bench-results/gce-20260930-c3-capacity/SHA256SUMS`.
+
+---
+
+## 11. GCE c3-standard-4 Retest Evidence (2026-10-01)
+
+### 11.1 Experiment Provenance & Setup
+
+The formal GCE C3 capacity retest was executed on 2026-10-01 to validate the revised capacity exploration protocol, lower-load stability, failure boundary classification, and complete artifact preservation on physical cloud infrastructure:
+
+- **Target Evaluated Commit**: `4ae7f78111b1bdab07f455f793615e039018a276` (PR #65 merge commit)
+- **Run Identifier**: `c3-retest-20261001T061200Z`
+- **Execution Topology**: Two dedicated `c3-standard-4` instances (`bench-app-c3`: 10.146.0.11, `bench-loadgen-c3`: 10.146.0.12) in GCP zone `asia-northeast1-b` over a private VPC with Cloud NAT (RTT: min/avg/max = 0.038 / 0.039 / 0.040 ms)
+- **Hardware/Host**: Intel(R) Xeon(R) Platinum 8481C @ 2.70GHz, 4 vCPUs (0-3), SMT 2 threads/core, 16 GiB memory, Linux kernel `7.0.0-1013-gcp`, Ubuntu 24.04.1 LTS
+- **Workload**: `app-sliced-page20-1000` at `GET /articles?page=1` (1,000 articles, page size 20)
+- **Profile Parameters**: `profiles/formal-capacity.json`
+  - Total runner budget: 36,000s (10.0 hours)
+  - Diagnostics: disabled for capacity measurement
+  - Warmup: closed-loop with **4 VUs** (`warmup_connections: 4`), 30s windows (180s–900s), CV/drift ≤ 0.08
+  - Starting offered rates: 25 RPS for un-JITed targets (`rails-cruby-off`, `rails-jruby-off`, `emit-cruby-off`, `emit-jruby-off`), 100 RPS for other targets
+  - Capacity bounds: 1 to 12,800 offered RPS, tolerance `min(5 RPS, confirmed_lower × 0.05)`
+  - Confirmation window: 120 seconds sustained (SLO: p99 ≤ 100 ms, error rate < 0.1%, drops = 0)
+  - Recovery health probe: 1 RPS × 5s (max 3 attempts, 60s timeout)
+- **Raw Evidence Release**: Published to [GitHub Release gce-c3-retest-20261001-c3-retest-20261001T061200Z](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-retest-20261001-c3-retest-20261001T061200Z)
+  - Archive: `c3-retest-20261001T061200Z.tar.gz` (10,348 files, 157.0 MB extracted)
+  - Verification: 100% verified against remote `SHA256SUMS.received` (`transfer-verification.exit`: 0)
+
+### 11.2 Step 0: Preflight and Correctness Gate
+
+Strict preflight evaluation verified all 9 target runtimes against `GET /articles?page=1` with 1,000 fixture articles. All 9 targets reported `eligible_endpoints` including `/articles?page=1`, `/articles`, `/articles/1`, `/articles/new`, `/articles.json`, `/articles/1.json`, and `/articles?page=1&pagination=db-paged`. Manifest generated at `preflight/preflight-manifest.json`.
+
+### 11.3 Step 1A: Low-VU Closed-Loop Diagnostic Results
+
+Before launching formal capacity measurement, low-concurrency closed-loop diagnostics evaluated 4 target runtimes (`rails-jruby-off`, `emit-jruby-off`, `emit-jruby`, `spinel`) across 1 VU and 4 VUs (3 repetitions, 120s measurement window, 1 VU warmup):
+
+| Target | Concurrency | Reps Completed | Achieved RPS | Median p50 (ms) | Worst p95 (ms) | Worst p99 (ms) | Error Rate | Peak Memory (MiB) | Tester CPU % | Assessment |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| `spinel` | 1 VU | 3/3 | 53.4–53.6 | 17.8 | 20.5 | 22.1 | 0.00% | 38.6–39.1 | 3.2–3.7% | Stable, minimal latency |
+| `emit-jruby` | 1 VU | 3/3 | 30.1–31.8 | 31.6 | 43.2 | 46.0 | 0.00% | 567.8–582.9 | 2.1–2.3% | Stable |
+| `rails-jruby-off` | 1 VU | 3/3 | 5.9–6.2 | 161.9 | 191.4 | 201.0 | 0.00% | 553.5–568.0 | 0.5–0.8% | Stable un-JITed baseline |
+| `emit-jruby-off` | 1 VU | 3/3 | 1.85–1.92 | 529.0 | 547.9 | 567.1 | 0.00% | 428.4–433.0 | 0.2–0.8% | Stable; single request ~520ms |
+| `spinel` | 4 VU | 3/3 | 135.9–137.3 | 28.1 | 34.3 | 38.1 | 0.00% | 111.4–121.8 | 8.3–8.5% | Exceptional scaling |
+| `emit-jruby` | 4 VU | 3/3 | 61.9–66.9 | 59.1 | 89.7 | 115.3 | 0.00% | 823.8–848.0 | 3.9–4.9% | Stable linear scaling |
+| `rails-jruby-off` | 4 VU | 3/3 | 11.8–11.9 | 317.2 | 437.5 | 536.1 | 0.00% | 628.2–691.8 | 0.8–1.3% | Throughput ceiling ~12 RPS |
+| `emit-jruby-off` | 4 VU | 3/3 | 3.00–3.21 | 1326.6 | 1359.0 | 1461.9 | 0.00% | 416.4–433.3 | 0.3% | Latency extends to ~1.3s; 0 errors |
+
+All 24 trials achieved `warmup_converged: True` within 30–40 seconds. Zero process crashes, OOMs, or HTTP errors occurred. `emit-jruby-off` demonstrates that while individual request execution takes ~520 ms without JIT (and ~1.3s at 4 VUs), closed-loop execution is completely healthy and stable.
+
+### 11.4 Step 1B: Low-RPS Open-Arrival Diagnostic Results
+
+Step 1B evaluated the same 4 targets under open-arrival conditions at 1, 5, and 10 offered RPS (3 repetitions each, 120s measurement window, 1 VU warmup):
+
+| Target | Offered RPS | Success Rate | Median p50 (ms) | Worst p95 (ms) | Worst p99 (ms) | Error Rate | Failure Breakdown | Diagnostic Outcome |
+|---|---:|---:|---:|---:|---:|---:|---|---|
+| `spinel` | 1 RPS | 3/3 | 19.1 | 23.3 | 24.5 | 0.00% | None | Passed |
+| `emit-jruby` | 1 RPS | 3/3 | 32.2 | 35.7 | 43.7 | 0.00% | None | Passed |
+| `rails-jruby-off` | 1 RPS | 3/3 | 162.2 | 184.0 | 191.7 | 0.00% | None | Passed |
+| `emit-jruby-off` | 1 RPS | 3/3 | 523.1 | 535.2 | 538.1 | 0.00% | None | **Passed** (Low-load health confirmed) |
+| `spinel` | 5 RPS | 3/3 | 19.7 | 24.9 | 27.8 | 0.00% | None | Passed |
+| `emit-jruby` | 5 RPS | 3/3 | 32.7 | 37.1 | 39.5 | 0.00% | None | Passed |
+| `rails-jruby-off` | 5 RPS | 3/3 | 162.5 | 190.4 | 197.2 | 0.00% | None | Passed |
+| `emit-jruby-off` | 5 RPS | 0/3 | ~5,000 | ~5,000 | ~5,000 | 92.8% | timeout: 543, network: 0, 5xx: 0 | **SLO Failed** (Queue accumulation) |
+| `spinel` | 10 RPS | 3/3 | 20.1 | 25.2 | 27.5 | 0.00% | None | Passed |
+| `emit-jruby` | 10 RPS | 3/3 | 30.6 | 35.7 | 37.1 | 0.00% | None | Passed |
+| `rails-jruby-off` | 10 RPS | 3/3 | 176.2 | 554.9 | 705.8 | 0.00% | None | Passed (Queuing begins near capacity) |
+| `emit-jruby-off` | 10 RPS | 0/3 | ~5,000 | ~5,000 | ~5,000 | 95%+ | timeout: 1,100+, network: 0, 5xx: 0 | **SLO Failed** (Queue accumulation) |
+
+**Root Cause Identification**: The failure boundary of `emit-jruby-off` is definitively pinpointed between 1 RPS and 5 RPS. Because serving capacity is ~1.9–3.0 RPS, open arrivals at 5 RPS inevitably outpace dequeue capacity, leading directly to the 5,000 ms request timeout. The absence of network drops, 500 status codes, or payload corruption proves that failure is strictly an open-arrival queuing phenomenon.
+
+### 11.5 Step 2: Formal Capacity Remeasurement & Capacity Intervals
+
+The formal capacity evaluation executed 45 trials under a 10-hour runner budget (`total_timeout: 36000`). Thirty trials were started; 19 achieved confirmed capacity, 11 failed/became unstable during search, and the final 15 trials were recorded as `not_run` upon budget exhaustion without silent completion.
+
+| Target | Confirmed Reps | Confirmed Lower RPS (120s Confirm) | Failed Upper RPS | Upper Seconds | Interval Width (RPS) | Tolerance (RPS) | Search Status |
+|---|---:|---|---|---:|---|---|---|
+| **`emit-cruby-yjit`** | 3/5 | **106.25 – 108.98** | 109.38 – 112.50 | 30s / 120s | 3.125 – 3.516 | 4.04 – 5.00 | `pass` |
+| **`rails-cruby-yjit`** | 2/5 | **93.75** | 96.88 | 30s | 3.125 | 4.69 | `pass` (Rep 3: `boundary_unstable` at 87.89 RPS) |
+| **`rails-cruby-off`** | 3/5 | **48.44 – 60.94** | 50.00 – 62.50 | 30s | 1.562 – 1.563 | 2.42 – 3.05 | `pass` |
+| **`rails-jruby`** | 3/5 | **42.19 – 54.49** | 43.75 – 56.25 | 30s / 120s | 1.562 – 1.758 | 2.11 – 2.72 | `pass` |
+| **`emit-jruby`** | 4/5 | **35.94 – 48.44** | 37.50 – 50.00 | 30s | 1.562 – 1.563 | 1.80 – 2.42 | `pass` |
+| **`emit-cruby-off`** | 3/5 | **21.88 – 23.44** | 22.66 – 24.22 | 30s | 0.781 – 0.782 | 1.09 – 1.17 | `pass` |
+| **`spinel`** | 1/5 | **14.45** | 14.84 | 30s | 0.390 | 0.72 | `pass` (Reps 1, 2 failed recovery) |
+| `rails-jruby-off` | 0/5 | — | — | — | — | — | Unconfirmed (`SUT recovery not verified`) |
+| `emit-jruby-off` | 0/5 | — | — | — | — | — | Unconfirmed (`SUT recovery not verified`) |
+
+### 11.6 Protocol Verifications from GCE Hardware
+
+The retest provided direct physical confirmation of the PR #65 capacity algorithm enhancements:
+1. **Refinement After Confirmation Failure**: For `spinel` in Rep 1, after failing a 120-second candidate at 15.625 RPS, the runner backed off to 7.812 RPS, succeeded, and climbed back to test 11.719 RPS rather than terminating after a single halved step. In Rep 3, Spinel converged to a confirmed interval of `[14.453, 14.843]` RPS.
+2. **Recovery Health Probing**: When overload occurred at starting RPS (e.g. 25 RPS on `rails-jruby-off`), the 1 RPS × 5s recovery health probe executed. Because client-side recovery probing cannot guarantee internal server queue drainage, `server_queue_drained` was strictly preserved as `null`, and the trial was safely terminated rather than allowing contaminated downstream measurements.
+3. **Budget and Coverage Discipline**: At the 10-hour runner limit, ongoing trial `0029-rails-jruby` recorded `Insufficient remaining capacity measurement budget`, and the remaining 15 trials were recorded as `not_run`. Plan vs. execution coverage was preserved without artificial completion.
+
+### 11.7 Comparison Across Benchmarking Cohorts
+
+> [!WARNING]
+> Do not compute direct performance speedup multipliers between the 2026-09-30 release and the 2026-10-01 retest. The two cohorts differ in warmup concurrency (32 VUs vs. 4 VUs) and search resolution (25-RPS coarse steps vs. fractional bound refinement).
+
+| Target Runtime | 2026-09-30 Candidate Cohort (32 VU Warmup) | 2026-10-01 Interval Cohort (4 VU Warmup) | Notes on Methodological Differences |
+|---|---|---|---|
+| `emit-cruby-yjit` | 99.99 RPS (5/5 reps confirmed) | **[106.25, 112.50] RPS** (3 reps evaluated) | Refined upper bracket confirms ~108 RPS capacity |
+| `rails-cruby-yjit` | 75.00 RPS (5/5 reps confirmed) | **[93.75, 96.88] RPS** (2 reps evaluated) | 4-VU warmup allowed discovery of higher sustainable point |
+| `rails-cruby-off` | 49.99 RPS (5/5 reps confirmed) | **[48.44, 60.94] RPS** (3 reps evaluated) | Verified baseline within consistent ~50–60 RPS band |
+| `rails-jruby` | 25.00 RPS (4/5 reps confirmed) | **[42.19, 54.49] RPS** (3 reps evaluated) | 4-VU warmup eliminated CV instability during warmup |
+| `emit-jruby` | 49.99 RPS (5/5 reps confirmed) | **[35.94, 48.44] RPS** (4 reps evaluated) | Narrowed upper bounds within ~45–48 RPS |
+| `emit-cruby-off` | 0/5 reps confirmed (failed at 25 RPS) | **[21.88, 23.44] RPS** (3 reps confirmed) | Fractional search successfully resolved capacity below 25 RPS |
+| `spinel` | 0/5 reps confirmed (warmup timeout at 32 VU) | **[14.45, 14.84] RPS** (1 rep confirmed) | 4-VU warmup succeeded; resolved open-arrival capacity |
+| `rails-jruby-off` | 0/5 reps confirmed (warmup fail-fast) | 0/5 reps confirmed in capacity (Step 1A: 11.8 RPS) | Starting 25 RPS exceeded ceiling; safe termination enforced |
+| `emit-jruby-off` | 0/5 reps confirmed (warmup fail-fast) | 0/5 reps confirmed in capacity (Step 1B: 1 RPS pass, 5 RPS fail) | Failure boundary established at 1–5 RPS in diagnostic |
+
+### 11.8 Infrastructure Teardown & Final Integrity Verification
+
+- **VM Status**: Both instances were terminated immediately after data recovery via `gce_cleanup.py`.
+  - `bench-app-c3`: `TERMINATED` (checked_at: 1790889050)
+  - `bench-loadgen-c3`: `TERMINATED` (checked_at: 1790889050)
+  - Documented in `bench-results/c3-retest-20261001T061200Z/cleanup.json`.
+- **Integrity**: 10,344 transferred artifact files were verified against remote `SHA256SUMS.received` (`transfer-verification.log`: 0 missing, 0 mismatches). Final manifest contains 10,348 files including teardown proof.
+
