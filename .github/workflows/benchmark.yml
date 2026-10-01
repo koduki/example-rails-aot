@@ -95,6 +95,9 @@ jobs:
           python3 scripts/bench/run.py run --profile bench/profiles/crud.yml --dry-run > benchmark-plan-crud.json
           python3 scripts/bench/run.py run --profile bench/profiles/crud-create-delete.yml --dry-run > benchmark-plan-crud-create-delete.json
 
+          python3 scripts/bench/load_sweep.py --mode vus --values 1,4 --output bench-results/sweep-plan-vus
+          python3 scripts/bench/load_sweep.py --mode rates --values 0.5,1,5 --output bench-results/sweep-plan-rates
+
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: '1.9.8'

@@ -26,12 +26,12 @@ def generate(root):
     checks = json.loads((root / 'preflight/preflight.json').read_text(encoding='utf-8'))
     env = json.loads((root / 'env.json').read_text(encoding='utf-8'))
     pairs = {f'{a}/{b}': paired_ratios(rows, a, b) for a, b in PAIRS}
-    source = {'schema_version': 1, 'commit': env['git_commit'], 'profile': profile,
+    source = {'schema_version': 2, 'commit': env['git_commit'], 'profile': profile,
               'environment': env, 'checks': checks, 'trials': rows, 'paired': pairs}
     (root / 'gce-summary.json').write_text(json.dumps(source, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
     lines = ['# GCE c3-standard-4 × 2 Benchmark Report', '',
              '## Executive Summary', '',
-             'Only confirmed per-repetition sustainable capacity is eligible for comparison.',
+             'Confirmed candidates are measured lower points; capacity precision depends on each search interval.',
              'Any missing or failed repetition makes a target incomplete. These results represent the full runtime stacks.', '',
              '## Experiment and provenance', '',
              f'- Commit: `{env["git_commit"]}`',
@@ -55,7 +55,7 @@ def generate(root):
         status = c.get('status') or ('passed' if c.get('complete') else ('eligible' if profile['endpoints'][0] in c.get('eligible_endpoints', []) else 'missing'))
         lines.append(f'| `{target}` | {profile["endpoints"][0] in c.get("eligible_endpoints", [])} | {status} |')
     lines += ['', '## Primary capacity and latency', '',
-              '| Target | Confirmed reps | Median sustainable RPS | Worst p99 ms | Worst error % | Mean app CPU % | Peak memory MB | Warmup s range |',
+              '| Target | Confirmed reps | Median confirmed candidate RPS | Worst p99 ms | Worst error % | Mean app CPU % | Peak memory MiB | Warmup s range |',
               '| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |']
     for target in profile['targets']:
         trials = [r for r in rows if r['target'] == target]
@@ -72,7 +72,7 @@ def generate(root):
         fmt = lambda x: f'{x:.2f}' if x is not None else '—'
         lines.append(f'| `{target}` | {len(good)}/{profile["repetitions"]} | {fmt(statistics.median(capacities) if complete else None)} | {fmt(max(p99s) if p99s else None)} | {fmt(max(errors) if errors else None)} | {fmt(statistics.mean(cpu) if cpu else None)} | {fmt(max(memory) if memory else None)} | {f"{min(warmup):.0f}–{max(warmup):.0f}" if warmup else "—"} |')
     lines += ['', '## All repetitions', '',
-              '| Target | Rep | Status | Sustained RPS | Offered RPS | Confirm p99 ms | Error % | App CPU % | Memory MB | Warmup s |',
+              '| Target | Rep | Status | Confirmed candidate RPS | Offered RPS | Confirm p99 ms | Error % | App CPU % | Memory MiB | Warmup s |',
               '| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
     for r in rows:
         m = r.get('measurement', {})
@@ -80,12 +80,22 @@ def generate(root):
         cpu_pct = tele.get('mean_cpu_pct', '—')
         mem_mb = round(tele['peak_container_memory_bytes'] / 1048576, 2) if tele.get('peak_container_memory_bytes') is not None else '—'
         lines.append(f'| `{r["target"]}` | {r["repetition"]} | {r["status"]} | {r.get("capacity_rps", "—")} | {r.get("offered_rps", "—")} | {m.get("latency_ms", {}).get("p99", "—")} | {round(100*m.get("requests_failed", 0)/max(1,m.get("requests_total",0)), 3) if m else "—"} | {cpu_pct} | {mem_mb} | {round(r.get("warmup_seconds", 0))} |')
-    lines += ['', '## Paired capacity ratios', '', '| Numerator / denominator | Median | Min | Max | IQR | Per repetition |', '| --- | ---: | ---: | ---: | ---: | --- |']
+    lines += ['', '## Search intervals', '',
+              'Legacy runs without interval fields are candidate comparisons, not resolved maximum-capacity estimates.',
+              'Bounds use offered RPS; the failed upper duration may differ from the 120-second lower confirmation.', '',
+              '| Target | Rep | Confirmed lower RPS | Failed upper RPS | Upper seconds | Width RPS | Tolerance RPS | Search status |',
+              '| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |']
+    for row in rows:
+        interval = row.get('capacity_interval', {})
+        values = [interval.get(key, '—') for key in ('confirmed_lower_rps', 'failed_upper_rps',
+                  'failed_upper_seconds', 'resolution_rps', 'tolerance_rps', 'status')]
+        lines.append(f'| `{row["target"]}` | {row["repetition"]} | ' + ' | '.join(map(str, values)) + ' |')
+    lines += ['', '## Paired confirmed-candidate ratios' , '', '| Numerator / denominator | Median | Min | Max | IQR | Per repetition |', '| --- | ---: | ---: | ---: | ---: | --- |']
     for key, result in pairs.items():
         per_rep = ', '.join(f"{entry['repetition']}: {entry['ratio']:.3f}" for entry in result['pairs'])
         lines.append(f'| `{key}` | {result["median"] if result["median"] is not None else "—"} | {result["min"] if result["min"] is not None else "—"} | {result["max"] if result["max"] is not None else "—"} | {result["iqr"] if result["iqr"] is not None else "—"} | {per_rep} |')
     lines += ['', '## Warmup, CPU and memory', '',
-              'Each trial stores warmup windows, per-step Docker telemetry, capacity-search steps, and tester mpstat/network/memory artifacts. Summary app CPU/memory refers to the confirmation interval (including remote orchestration). Inspect per-repetition tier differences for JRuby before drawing a JIT conclusion.', '',
+              'Each trial stores warmup windows, per-step Docker telemetry, capacity-search steps, and tester mpstat/network/memory artifacts. Summary app CPU/memory refers to the confirmation interval (including remote orchestration). Rates differ between targets; these aggregates are not same-load efficiency comparisons. Inspect per-repetition tier differences for JRuby before drawing a JIT conclusion.', '',
               '## Spinel interpretation and limitations', '',
               'Spinel includes native compilation, HTTP, DB adapter, scheduling and memory management. The measured difference is attributable to the Roundhouse + Spinel execution architecture as a whole, not the AOT compiler alone.',
               'SQLite single-writer contention remains even when CRUD writes use different article IDs. Hosted Actions smoke observations are excluded from this report.', '',

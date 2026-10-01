@@ -1,5 +1,13 @@
 # GCE c3-standard-4 × 2 Benchmark Report
 
+## Evidence review (2026-10-01)
+
+The numeric tables below describe confirmed **candidate lower points**, not precisely resolved maximum capacities. In the measured runner, a failed 120-second candidate was halved and the first lower successful point ended the search; the 25-RPS tolerance was also coarse. Candidate ratios reproduce the arithmetic but retain this search uncertainty. `rails-jruby` has only four valid pairs, so its 25-RPS median is a partial observation, not a complete five-repetition ranking.
+
+The release archive SHA-256 is `4ceded406c302c877a9faa3394b47b8edb38084190b0a6cb5fdf808518ac3646`; all 6,578 manifest entries were verified. Eight failed trial directories lack `trial.json` (five `emit-cruby-off`, three `rails-jruby-off`); the authoritative per-run index and available raw steps remain usable, with this gap explicit. No `cleanup.json`, low-load sweep, JFR or measured stage microbenchmark is included. The measured commit differs from the report revision; preserve both SHAs and the existing release tag.
+
+The revised runner searches down to 1 RPS, refines after confirmation failure with fractional offered rates and records confirmed lower/failed upper bounds, their durations and resolution. It uses a four-VU warmup, separate from this release's 32-VU cohort. These changes have not been rerun on C3. See [runtime failure investigation](diagnostics-jruby-off-and-spinel.md), [aligned observations](reversal-analysis-rails-vs-roundhouse.md), and [measurement protocol](../.agents/skills/gce-benchmark-runbook/references/measurement-protocol.md).
+
 ## Executive Summary
 
 The formal two-VM capacity experiment was executed on Google Compute Engine using two dedicated `c3-standard-4` instances (App SUT: `bench-app-c3`, Load Generator: `bench-loadgen-c3`) in `asia-northeast1-b` over a private VPC with Cloud NAT. The experiment evaluated 9 target runtime configurations across 5 randomized rotation repetitions (45 total trials) using the formal capacity profile `bench/profiles/gce-c3-capacity.yml` on commit `bf098d3e724af5b84d26da9e8398942716a50009`.
@@ -8,10 +16,10 @@ Under the rigorous benchmarking contract (`rigorous-benchmarking`), **only confi
 
 - **Correctness Gate**: All 9 targets passed strict preflight verification for the primary workload `/articles?page=1` (`app-sliced-page20-1000`).
 - **Confirmed Capacity Outcomes**:
-  - **`emit-cruby-yjit`**: Achieved **5/5 confirmed repetitions** with median sustainable **99.99 RPS** (worst p99: **56.36 ms**), mean CPU utilization of 191.1%, and peak memory of **224.9 MB**—the highest sustained throughput, lowest worst-case latency, and lowest memory footprint among all evaluated runtimes.
-  - **`rails-cruby-yjit`**: Achieved **5/5 confirmed repetitions** with median sustainable **75.00 RPS** (worst p99: **82.61 ms**), outperforming `rails-cruby-off` by a median ratio of **1.50x**.
-  - **`rails-cruby-off`**: Achieved **5/5 confirmed repetitions** with median sustainable **49.99 RPS** (worst p99: **62.73 ms**), establishing the verified baseline for standard Ruby bytecode interpretation.
-  - **`emit-jruby`**: Achieved **5/5 confirmed repetitions** with median sustainable **49.99 RPS** (worst p99: **81.69 ms**), achieving **2.00x** the throughput of standard `rails-jruby` in matched repetitions.
+  - **`emit-cruby-yjit`**: Achieved **5/5 confirmed repetitions** with median confirmed candidate **99.99 RPS** (worst p99: **56.36 ms**), mean CPU utilization of 191.1%, and peak memory of **224.9 MiB** among the successfully confirmed candidate cohorts; offered rates differ.
+  - **`rails-cruby-yjit`**: Achieved **5/5 confirmed repetitions** with median confirmed candidate **75.00 RPS** (worst p99: **82.61 ms**), outperforming `rails-cruby-off` by a median ratio of **1.50x**.
+  - **`rails-cruby-off`**: Achieved **5/5 confirmed repetitions** with median confirmed candidate **49.99 RPS** (worst p99: **62.73 ms**), establishing the verified baseline for standard Ruby bytecode interpretation.
+  - **`emit-jruby`**: Achieved **5/5 confirmed repetitions** with median confirmed candidate **49.99 RPS** (worst p99: **81.69 ms**), achieving **2.00x** the throughput of standard `rails-jruby` in matched repetitions.
   - **`rails-jruby`**: Achieved **4/5 confirmed repetitions** with **25.00 RPS** (worst p99: **61.61 ms**; Rep 1 was unstable during warmup with CV > 5%).
 - **Paired Capacity Speedup Ratios**:
   - `emit-cruby-yjit / rails-cruby-yjit`: Median **1.333x** (Rep 1: 1.613x, Rep 2: 2.000x, Rep 3: 1.000x, Rep 4: 1.333x, Rep 5: 0.750x).
@@ -21,8 +29,8 @@ Under the rigorous benchmarking contract (`rigorous-benchmarking`), **only confi
   - The adaptive fail-fast configuration (`warmup_fail_fast_windows: 3`, `warmup_max_latency_ms: 2000`) successfully terminated hopeless warmup phases for JIT-off variants (`rails-jruby-off`, `emit-jruby-off`) at ~194–206 seconds instead of exhausting the full 900-second warmup budget. This reduced total suite execution time to ~10 hours.
 - **Unconfirmed / Incomplete Targets (0/5)**:
   - `spinel`: 0/5 confirmed repetitions. Spinel suffered warmup timeouts (~915s) under the in-memory `app-sliced-page20-1000` workload without database-level offset support (#54).
-  - `emit-cruby-off`: 0/5 confirmed repetitions due to search step failures at higher rates without JIT.
-  - `rails-jruby-off` and `emit-jruby-off`: 0/5 confirmed repetitions because pure interpretation without JIT could not sustain the minimum 25 RPS threshold under the 100 ms SLO.
+  - `emit-cruby-off`: 0/5 confirmed repetitions because the initial 25-RPS step failed p99 (about 106–122 ms) in all five trials, with no request errors or drops; below 25 RPS was not tested.
+  - `rails-jruby-off` and `emit-jruby-off`: 0/5 confirmed repetitions because warmup did not converge; low-rate open-arrival feasibility is unmeasured. HotSpot was not disabled by JRuby compile.mode=OFF.
 
 ---
 
@@ -100,13 +108,13 @@ Preflight manifest and checksums: `bench-results/gce-20260930-c3-capacity/prefli
 
 ## 4. Primary Capacity & Latency Summary
 
-| Target | Confirmed Reps | Median Sustainable RPS | Worst p99 ms | Worst Error % | Mean App CPU % | Peak Memory (MB) | Warmup Duration Range |
+| Target | Confirmed Reps | Median Confirmed Candidate RPS | Worst p99 ms | Worst Error % | Mean App CPU % | Peak Memory (MiB) | Warmup Duration Range |
 |---|---:|---:|---:|---:|---:|---:|---|
-| **`emit-cruby-yjit`** | **5/5** | **99.99** | **56.36** | 0.00% | 191.13% | **224.90 MB** | 182–212s |
-| **`rails-cruby-yjit`** | **5/5** | **75.00** | 82.61 | 0.00% | 120.58% | 642.50 MB | 181–242s |
-| **`rails-cruby-off`** | **5/5** | **49.99** | 62.73 | 0.00% | 130.97% | 484.50 MB | 183s |
-| **`emit-jruby`** | **5/5** | **49.99** | 81.69 | 0.00% | 115.28% | 1093.63 MB | 183–244s |
-| `rails-jruby` | 4/5 | 25.00 | 61.61 | 0.00% | 96.88% | 1682.43 MB | 304–911s |
+| **`emit-cruby-yjit`** | **5/5** | **99.99** | **56.36** | 0.00% | 191.13% | **224.90 MiB** | 182–212s |
+| **`rails-cruby-yjit`** | **5/5** | **75.00** | 82.61 | 0.00% | 120.58% | 642.50 MiB | 181–242s |
+| **`rails-cruby-off`** | **5/5** | **49.99** | 62.73 | 0.00% | 130.97% | 484.50 MiB | 183s |
+| **`emit-jruby`** | **5/5** | **49.99** | 81.69 | 0.00% | 115.28% | 1093.63 MiB | 183–244s |
+| `rails-jruby` | 4/5 | 25.00 | 61.61 | 0.00% | 96.88% | 1682.43 MiB | 304–911s |
 | `emit-cruby-off` | 0/5 | — | — | — | — | — | 216–680s |
 | `rails-jruby-off` | 0/5 | — | — | — | — | — | 194–195s (Fail-Fast) |
 | `emit-jruby-off` | 0/5 | — | — | — | — | — | 203–206s (Fail-Fast) |
@@ -131,73 +139,63 @@ Paired ratios are computed solely across identical randomized repetitions where 
 
 ## 6. All 45 Trial Repetitions
 
-| Trial | Target | Rep | Status | Sustained RPS | Offered RPS | Confirm p99 (ms) | Error % | App CPU % | Memory (MB) | Warmup (s) |
+| Trial | Target | Rep | Status | Sustained RPS | Offered RPS | Confirm p99 (ms) | Error % | App CPU % | Memory (MiB) | Warmup (s) |
 |---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
 | `0000` | `rails-jruby` | 1 | `unstable` | — | — | — | — | — | — | 911s |
 | `0001` | `rails-jruby-off` | 1 | `unstable` | — | — | — | — | — | — | 194s |
-| `0002` | `emit-jruby` | 1 | `passed` | 25.00 | 25 | 35.50 | 0.0% | 63.97% | 922.1 MB | 243s |
+| `0002` | `emit-jruby` | 1 | `passed` | 25.00 | 25 | 35.50 | 0.0% | 63.97% | 922.1 MiB | 243s |
 | `0003` | `emit-jruby-off` | 1 | `unstable` | — | — | — | — | — | — | 205s |
-| `0004` | `rails-cruby-yjit` | 1 | `passed` | 62.00 | 62 | 28.67 | 0.0% | 85.04% | 632.6 MB | 181s |
-| `0005` | `rails-cruby-off` | 1 | `passed` | 50.00 | 50 | 56.87 | 0.0% | 143.66% | 483.8 MB | 183s |
-| `0006` | `emit-cruby-yjit` | 1 | `passed` | 99.98 | 100 | 54.60 | 0.0% | 202.82% | 223.7 MB | 182s |
+| `0004` | `rails-cruby-yjit` | 1 | `passed` | 62.00 | 62 | 28.67 | 0.0% | 85.04% | 632.6 MiB | 181s |
+| `0005` | `rails-cruby-off` | 1 | `passed` | 50.00 | 50 | 56.87 | 0.0% | 143.66% | 483.8 MiB | 183s |
+| `0006` | `emit-cruby-yjit` | 1 | `passed` | 99.98 | 100 | 54.60 | 0.0% | 202.82% | 223.7 MiB | 182s |
 | `0007` | `emit-cruby-off` | 1 | `failed` | — | — | — | — | — | — | 680s |
 | `0008` | `spinel` | 1 | `unstable` | — | — | — | — | — | — | 916s |
-| `0009` | `rails-jruby` | 2 | `passed` | 25.00 | 25 | 46.38 | 0.0% | 69.36% | 1485.8 MB | 669s |
+| `0009` | `rails-jruby` | 2 | `passed` | 25.00 | 25 | 46.38 | 0.0% | 69.36% | 1485.8 MiB | 669s |
 | `0010` | `spinel` | 2 | `unstable` | — | — | — | — | — | — | 916s |
 | `0011` | `emit-cruby-off` | 2 | `failed` | — | — | — | — | — | — | 402s |
-| `0012` | `emit-cruby-yjit` | 2 | `passed` | 99.99 | 100 | 56.36 | 0.0% | 211.59% | 224.2 MB | 212s |
-| `0013` | `rails-cruby-off` | 2 | `passed` | 49.99 | 50 | 62.73 | 0.0% | 153.18% | 482.9 MB | 183s |
-| `0014` | `rails-cruby-yjit` | 2 | `passed` | 50.00 | 50 | 27.88 | 0.0% | 71.43% | 642.5 MB | 242s |
+| `0012` | `emit-cruby-yjit` | 2 | `passed` | 99.99 | 100 | 56.36 | 0.0% | 211.59% | 224.2 MiB | 212s |
+| `0013` | `rails-cruby-off` | 2 | `passed` | 49.99 | 50 | 62.73 | 0.0% | 153.18% | 482.9 MiB | 183s |
+| `0014` | `rails-cruby-yjit` | 2 | `passed` | 50.00 | 50 | 27.88 | 0.0% | 71.43% | 642.5 MiB | 242s |
 | `0015` | `emit-jruby-off` | 2 | `unstable` | — | — | — | — | — | — | 205s |
-| `0016` | `emit-jruby` | 2 | `passed` | 50.00 | 50 | 74.59 | 0.0% | 140.76% | 1093.6 MB | 243s |
+| `0016` | `emit-jruby` | 2 | `passed` | 50.00 | 50 | 74.59 | 0.0% | 140.76% | 1093.6 MiB | 243s |
 | `0017` | `rails-jruby-off` | 2 | `failed` | — | — | — | — | — | — | 195s |
-| `0018` | `emit-jruby` | 3 | `passed` | 50.00 | 50 | 81.69 | 0.0% | 152.60% | 854.9 MB | 244s |
+| `0018` | `emit-jruby` | 3 | `passed` | 50.00 | 50 | 81.69 | 0.0% | 152.60% | 854.9 MiB | 244s |
 | `0019` | `emit-jruby-off` | 3 | `unstable` | — | — | — | — | — | — | 206s |
-| `0020` | `rails-cruby-yjit` | 3 | `passed` | 99.98 | 100 | 82.61 | 0.0% | 168.32% | 613.1 MB | 181s |
-| `0021` | `rails-cruby-off` | 3 | `passed` | 25.00 | 25 | 39.87 | 0.0% | 68.35% | 482.9 MB | 183s |
-| `0022` | `emit-cruby-yjit` | 3 | `passed` | 99.99 | 100 | 55.36 | 0.0% | 210.14% | 224.9 MB | 182s |
+| `0020` | `rails-cruby-yjit` | 3 | `passed` | 99.98 | 100 | 82.61 | 0.0% | 168.32% | 613.1 MiB | 181s |
+| `0021` | `rails-cruby-off` | 3 | `passed` | 25.00 | 25 | 39.87 | 0.0% | 68.35% | 482.9 MiB | 183s |
+| `0022` | `emit-cruby-yjit` | 3 | `passed` | 99.99 | 100 | 55.36 | 0.0% | 210.14% | 224.9 MiB | 182s |
 | `0023` | `emit-cruby-off` | 3 | `failed` | — | — | — | — | — | — | 216s |
 | `0024` | `spinel` | 3 | `unstable` | — | — | — | — | — | — | 914s |
-| `0025` | `rails-jruby` | 3 | `passed` | 25.00 | 25 | 52.64 | 0.0% | 78.72% | 1555.5 MB | 305s |
+| `0025` | `rails-jruby` | 3 | `passed` | 25.00 | 25 | 52.64 | 0.0% | 78.72% | 1555.5 MiB | 305s |
 | `0026` | `rails-jruby-off` | 3 | `failed` | — | — | — | — | — | — | 195s |
-| `0027` | `emit-jruby` | 4 | `passed` | 25.00 | 25 | 45.44 | 0.0% | 72.50% | 927.8 MB | 183s |
+| `0027` | `emit-jruby` | 4 | `passed` | 25.00 | 25 | 45.44 | 0.0% | 72.50% | 927.8 MiB | 183s |
 | `0028` | `rails-jruby-off` | 4 | `unstable` | — | — | — | — | — | — | 195s |
-| `0029` | `rails-jruby` | 4 | `passed` | 50.00 | 50 | 61.61 | 0.0% | 160.34% | 1549.3 MB | 304s |
+| `0029` | `rails-jruby` | 4 | `passed` | 50.00 | 50 | 61.61 | 0.0% | 160.34% | 1549.3 MiB | 304s |
 | `0030` | `spinel` | 4 | `unstable` | — | — | — | — | — | — | 916s |
 | `0031` | `emit-cruby-off` | 4 | `failed` | — | — | — | — | — | — | 247s |
-| `0032` | `emit-cruby-yjit` | 4 | `passed` | 99.99 | 100 | 55.74 | 0.0% | 208.23% | 224.5 MB | 182s |
-| `0033` | `rails-cruby-off` | 4 | `passed` | 49.99 | 50 | 59.11 | 0.0% | 144.26% | 484.5 MB | 183s |
-| `0034` | `rails-cruby-yjit` | 4 | `passed` | 75.00 | 75 | 67.92 | 0.0% | 112.37% | 612.5 MB | 181s |
+| `0032` | `emit-cruby-yjit` | 4 | `passed` | 99.99 | 100 | 55.74 | 0.0% | 208.23% | 224.5 MiB | 182s |
+| `0033` | `rails-cruby-off` | 4 | `passed` | 49.99 | 50 | 59.11 | 0.0% | 144.26% | 484.5 MiB | 183s |
+| `0034` | `rails-cruby-yjit` | 4 | `passed` | 75.00 | 75 | 67.92 | 0.0% | 112.37% | 612.5 MiB | 181s |
 | `0035` | `emit-jruby-off` | 4 | `unstable` | — | — | — | — | — | — | 205s |
-| `0036` | `rails-cruby-yjit` | 5 | `passed` | 99.99 | 100 | 66.04 | 0.0% | 165.74% | 634.2 MB | 212s |
-| `0037` | `rails-cruby-off` | 5 | `passed` | 49.99 | 50 | 60.44 | 0.0% | 145.41% | 460.8 MB | 183s |
-| `0038` | `emit-cruby-yjit` | 5 | `passed` | 75.00 | 75 | 32.38 | 0.0% | 122.88% | 211.0 MB | 182s |
+| `0036` | `rails-cruby-yjit` | 5 | `passed` | 99.99 | 100 | 66.04 | 0.0% | 165.74% | 634.2 MiB | 212s |
+| `0037` | `rails-cruby-off` | 5 | `passed` | 49.99 | 50 | 60.44 | 0.0% | 145.41% | 460.8 MiB | 183s |
+| `0038` | `emit-cruby-yjit` | 5 | `passed` | 75.00 | 75 | 32.38 | 0.0% | 122.88% | 211.0 MiB | 182s |
 | `0039` | `emit-cruby-off` | 5 | `failed` | — | — | — | — | — | — | 463s |
 | `0040` | `spinel` | 5 | `unstable` | — | — | — | — | — | — | 917s |
-| `0041` | `rails-jruby` | 5 | `passed` | 25.00 | 25 | 49.36 | 0.0% | 79.08% | 1682.4 MB | 305s |
+| `0041` | `rails-jruby` | 5 | `passed` | 25.00 | 25 | 49.36 | 0.0% | 79.08% | 1682.4 MiB | 305s |
 | `0042` | `rails-jruby-off` | 5 | `failed` | — | — | — | — | — | — | 194s |
-| `0043` | `emit-jruby` | 5 | `passed` | 50.00 | 50 | 70.79 | 0.0% | 146.56% | 942.1 MB | 243s |
+| `0043` | `emit-jruby` | 5 | `passed` | 50.00 | 50 | 70.79 | 0.0% | 146.56% | 942.1 MiB | 243s |
 | `0044` | `emit-jruby-off` | 5 | `unstable` | — | — | — | — | — | — | 203s |
 
 ---
 
 ## 7. Technical Analysis & Findings
 
-### A. Emitted Code Generation & YJIT Synergy
-- **Throughput & Latency**: `emit-cruby-yjit` demonstrated exceptional efficiency, sustaining a median 99.99 RPS with a worst-case p99 of 56.36 ms (and sub-35 ms in low-contention repetitions). By compiling controller routing, view rendering, and model dispatch ahead-of-time, emit removes dynamic Rails framework overhead, while YJIT optimizes remaining runtime hot spots.
-- **Memory Footprint**: `emit-cruby-yjit` peaked at **224.9 MB**, approximately **35%** of standard Rails with YJIT (642.5 MB). Ahead-of-time code generation substantially reduces runtime metaprogramming structures and object allocation churn.
+The candidate tables support repeated successful confirmations for four configurations and partial confirmation for `rails-jruby`. The candidate ratio medians are 1.333x, 2.000x (four pairs) and 1.500x; they do not isolate code-generation or JIT mechanisms. Cross-target resource aggregates span different rates. The aligned rep-3 100-RPS/120-second YJIT comparison is documented separately.
 
-### B. JRuby Ahead-of-Time Advantage
-- In JRuby, `emit-jruby` delivered **49.99 RPS** (5/5 reps confirmed) compared to standard `rails-jruby` at **25.00 RPS** (4/5 reps confirmed).
-- Across matched repetitions, `emit-jruby` achieved a median **2.000x** throughput advantage over standard Rails on JRuby. Eliminating dynamic Active Support / Active Record metaprogramming significantly accelerates JVM JIT compilation and tier-2 bytecode optimization.
+Fail-fast stopped the failing JRuby-Off warmups at about 194–206 seconds. This is an observed early exit, not proof of unrecoverable saturation or a measured five-hour saving against a controlled baseline.
 
-### C. Warmup Fail-Fast Optimization Efficacy
-- In earlier benchmark iterations (e.g. 2026-09-28), JIT-off variants consumed the full 900-second warmup budget per repetition despite experiencing unrecoverable request timeouts.
-- In this run, the new `warmup_fail_fast_windows: 3` and `warmup_max_latency_ms: 2000` configuration detected hopeless saturation early and exited at ~194–206 seconds, saving over 5 hours of idle VM runtime across the suite.
-
-### D. Spinel In-Memory vs DB-Level Slicing Dynamics
-- Under the `app-sliced-page20-1000` workload, Spinel was unable to achieve warmup convergence within 900 seconds (0/5 reps). While Spinel's native execution architecture offers low peak memory, loading 1,000 SQLite records into coroutine memory without database-level `OFFSET` support creates heavy contention (#54).
-- The newly implemented DB-level pagination (`db-paged-page20-1000`, #47) resolves this by delegating `LIMIT 20 OFFSET ?` directly to SQLite.
+Spinel failed every warmup window with 10,929 failures in 475,935 requests. Missing SQL/worker traces and low-VU measurements leave the cause and safe load unresolved. DB paging changes the workload; this release cannot establish that it fixes the timeout behavior.
 
 ---
 
@@ -216,10 +214,7 @@ Paired ratios are computed solely across identical randomized repetitions where 
 
 ## 9. Resource Teardown and Cost Verification
 
-Both GCE VMs were terminated immediately following execution:
-- `bench-app-c3`: `TERMINATED`
-- `bench-loadgen-c3`: `TERMINATED`
-- Zero active compute charges remain. SSD persistent disks can be deleted via `terraform destroy` when no longer needed.
+The archive does not contain `cleanup.json` or dated stop-verification output. VM termination and compute billing cannot be verified from this evidence. The revised orchestrator records both stop results and timestamps; a stopped VM still retains billable disks until those disks are deleted.
 
 ---
 

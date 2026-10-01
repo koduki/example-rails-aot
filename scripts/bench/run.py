@@ -97,6 +97,17 @@ def config(path_or_dict):
         for key in ('capacity_start_rps', 'capacity_max_rps', 'capacity_step_seconds', 'capacity_tolerance_rps', 'slo_p99_ms'):
             if p.get(key, 0) <= 0:
                 raise ValueError('Invalid capacity setting: ' + key)
+    for key in ('capacity_min_rps', 'capacity_tolerance_ratio', 'recovery_probe_seconds',
+                'recovery_max_seconds', 'recovery_probe_rps'):
+        if key in p and (type(p[key]) not in (int, float) or p[key] <= 0):
+            raise ValueError('Invalid profile setting: ' + key)
+    for key in ('warmup_connections', 'capacity_max_steps', 'recovery_max_attempts'):
+        if key in p and (type(p[key]) is not int or p[key] < 1):
+            raise ValueError('Invalid profile setting: ' + key)
+    if p.get('capacity_tolerance_ratio', 0) >= 1:
+        raise ValueError('capacity_tolerance_ratio must be below 1')
+    if p.get('capacity_min_rps', 0) > p.get('capacity_start_rps', float('inf')):
+        raise ValueError('capacity_min_rps exceeds start rate')
     if 'target_capacity_start_rps' in p:
         if not isinstance(p['target_capacity_start_rps'], dict) or any(
                 not isinstance(v, (int, float)) or v <= 0 for v in p['target_capacity_start_rps'].values()):
@@ -373,6 +384,7 @@ class Server:
                                          check=True,timeout=10)
             except (RuntimeError,OSError,subprocess.TimeoutExpired) as e:
                 observed[path] = {'unavailable':str(e)}
+        observed['timestamp'] = time.time()
         save(self.directory/filename,observed)
         return observed
 
@@ -523,8 +535,10 @@ def sample(server, endpoint, duration, p, cpus, directory=None, rate=None, phase
                     '-e', f'RATE={rate}', '-e', f'TIMEOUT={int(p["request_timeout"])}s']
         if p.get('capacity_search'):
             env_args += ['-e', 'PRE_ALLOCATED_VUS=512', '-e', 'MAX_VUS=4096']
+        if phase != 'warmup' and p.get('measurement_closed_loop'):
+            env_args += ['-e', 'MODE=closed', '-e', f'WARMUP_VUS={p["connections"]}']
         if phase == 'warmup' and p.get('warmup_closed_loop'):
-            env_args += ['-e', 'MODE=closed', '-e', f'WARMUP_VUS={p.get("connections", 32)}']
+            env_args += ['-e', 'MODE=closed', '-e', f'WARMUP_VUS={p.get("warmup_connections", p.get("connections", 32))}']
         if is_crud:
             env_args += ['-e', f'NUM_ARTICLES={p.get("fixture_articles", 3)}',
                          '-e', f'SCENARIO={p.get("crud_scenario", "mix")}']
@@ -580,7 +594,7 @@ def sample(server, endpoint, duration, p, cpus, directory=None, rate=None, phase
 def validate_k6(measured, summary_path, is_crud):
     required = ('elapsed', 'rps', 'p95_ms', 'requests_total', 'requests_successful',
                 'requests_failed', 'iterations_dropped', 'client_saturated')
-    if measured.get('driver') not in ('k6-open-arrival', 'k6-crud') or any(k not in measured for k in required):
+    if measured.get('driver') not in ('k6-open-arrival', 'k6-closed-loop', 'k6-crud') or any(k not in measured for k in required):
         raise ValueError(f'Invalid k6 summary schema: {summary_path}')
     if measured['elapsed'] <= 0 or (measured['requests_successful'] > 0 and (
             measured['p95_ms'] <= 0 or measured.get('latency_ms', {}).get('p99', 0) <= 0)):
@@ -590,6 +604,36 @@ def validate_k6(measured, summary_path, is_crud):
             measured.get('operation_latency_ms', {}).get('p99', 0) <= 0):
         raise ValueError(f'Incomplete CRUD operation rate or latency metrics: {summary_path}')
     return measured
+
+def recover(server, endpoint, profile, cpus, directory):
+    """Bounded low-load health checks; does not assert server queue drainage."""
+    root = Path(directory)
+    attempts = []
+    deadline = time.monotonic() + profile.get('recovery_max_seconds', 60)
+    for index in range(profile.get('recovery_max_attempts', 3)):
+        if time.monotonic() >= deadline:
+            break
+        try:
+            m = sample(server, endpoint, profile['recovery_probe_seconds'], profile, cpus,
+                       root / f'{index:03d}', rate=profile.get('recovery_probe_rps', 1), phase='recovery')
+        except Exception as error:
+            attempts.append({'attempt': index, 'decision': 'measurement_error', 'error': str(error)})
+            save(root / 'recovery.json', {'status': 'unrecovered', 'attempts': attempts,
+                                         'server_queue_drained': None})
+            raise
+        state = capacity.decision(m, profile)
+        attempts.append({'attempt': index, 'decision': state, 'measurement': m})
+        save(root / 'recovery.json', {'status': 'healthy_probe' if state == 'pass' else 'pending',
+             'attempts': attempts, 'server_queue_drained': None,
+             'limitation': 'No active-request gauge; healthy low-load probes do not prove queue drainage.'})
+        if state == 'pass':
+            return m
+        if state in ('invalid_client', 'transport_error', 'unclassified'):
+            break
+    save(root / 'recovery.json', {'status': 'unrecovered', 'attempts': attempts,
+                                'server_queue_drained': None})
+    raise RuntimeError('SUT recovery not verified; restart and rewarm in a separate trial')
+
 
 def trials(p, cpus, output, checks):
     result = []
@@ -611,7 +655,7 @@ def trials(p, cpus, output, checks):
                     early_abort_reason = None
                     while elapsed < p['warmup_max_seconds'] and time.monotonic() < deadline:
                         save(directory / 'progress.json', {'target': trial['target'], 'repetition': trial['repetition'], 'phase': 'warmup', 'window': len(windows) + 1})
-                        window = sample(server, trial['endpoint'], p['window_seconds'], p, cpus, directory / f'warmup-{len(windows):03d}' if p.get('capacity_search') else directory, phase='warmup')
+                        window = sample(server, trial['endpoint'], p['window_seconds'], p, cpus, directory / f'warmup-{len(windows):03d}' if p.get('capacity_search') or p.get('retain_phase_artifacts') else directory, phase='warmup')
                         windows.append(window); elapsed += window['elapsed']
                         save(directory / 'warmup.json', windows)
                         # Functional smoke may see a startup timeout before the
@@ -659,9 +703,15 @@ def trials(p, cpus, output, checks):
                             telemetry = {'status': 'unavailable', 'reason': str(e)}
                         try:
                             if p.get('capacity_search'):
+                                recovery_needed = False
                                 def measure(rate, duration, phase):
-                                    nonlocal telemetry
-                                    step_dir = directory / f'{len(steps_seen):03d}-{phase}-{rate}'
+                                    nonlocal telemetry, recovery_needed
+                                    if time.monotonic() + duration > deadline:
+                                        raise RuntimeError('Insufficient remaining capacity measurement budget')
+                                    if recovery_needed and p.get('recovery_probe_seconds'):
+                                        recover(server, trial['endpoint'], p, cpus, directory / f'recovery-{len(steps_seen):03d}')
+                                        recovery_needed = False
+                                    step_dir = directory / f'{len(steps_seen):03d}-{phase}-{rate:g}'
                                     steps_seen.append(str(step_dir))
                                     save(directory / 'progress.json', {'target': trial['target'], 'repetition': trial['repetition'], 'phase': phase, 'rate': rate, 'step': len(steps_seen)})
                                     step_collector = collect.ResourceCollector(server.name, interval=1.0)
@@ -679,6 +729,7 @@ def trials(p, cpus, output, checks):
                                         if phase == 'confirm':
                                             telemetry = step_telemetry
                                     save(directory / 'last-step.json', {'phase': phase, 'rate': rate, 'measurement': measured_step})
+                                    recovery_needed = capacity.decision(measured_step, p) != 'pass'
                                     return measured_step
                                 steps_seen = []
                                 trial_p = dict(p)
@@ -696,12 +747,14 @@ def trials(p, cpus, output, checks):
                                     })
                                     raise
                                 save(directory / 'capacity-search.json', capacity_result)
+                                row['capacity_interval'] = {key: capacity_result.get(key) for key in
+                                    ('confirmed_lower_rps', 'failed_upper_rps', 'failed_upper_seconds', 'resolution_rps', 'tolerance_rps', 'status')}
                                 row['capacity_rps'] = capacity_result['capacity_rps']
                                 row['offered_rps'] = capacity_result['offered_rps']
                                 row['capacity_steps'] = steps_seen
                                 measured = capacity_result['measurement']
                             else:
-                                measured = sample(server, trial['endpoint'], p['measurement_seconds'], p, cpus, directory)
+                                measured = sample(server, trial['endpoint'], p['measurement_seconds'], p, cpus, directory / 'measurement' if p.get('retain_phase_artifacts') else directory, phase='measurement')
                         finally:
                             if collector:
                                 telemetry = collector.stop()
@@ -745,6 +798,14 @@ def trials(p, cpus, output, checks):
             except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
                 status = 'transport_or_artifact_error' if 'artifact transfer' in str(e).lower() else 'failed'
                 row.update(status=status, reason=str(e))
+            except (KeyboardInterrupt, SystemExit):
+                row.update(status='interrupted', reason='Benchmark interrupted')
+                raise
+            finally:
+                row['finished_at'] = time.time()
+                row['evidence_directory'] = str(directory)
+                save(directory / 'trial.json', row)
+                save(output / 'per-run.json', result)
         save(output / 'per-run.json', result)
     return result
 

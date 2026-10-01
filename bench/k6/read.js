@@ -5,6 +5,9 @@ import { Counter } from 'k6/metrics';
 const checkFailures = new Counter('check_failures');
 const successfulRequests = new Counter('successful_requests');
 const integrityFailures = new Counter('integrity_failures');
+const timeoutFailures = new Counter('timeout_failures');
+const networkFailures = new Counter('network_failures');
+const httpStatusFailures = new Counter('http_status_failures');
 
 const rate = Number(__ENV.RATE || 50);
 const duration = __ENV.DURATION || '30s';
@@ -17,8 +20,9 @@ export const options = {
   } : {
     open_arrival_reads: {
       executor: 'constant-arrival-rate',
-      rate: rate,
-      timeUnit: '1s',
+      // k6 requires an integer rate; this ratio preserves milli-RPS probes.
+      rate: Math.round(rate * 1000),
+      timeUnit: '1000s',
       duration: duration,
       preAllocatedVUs: preAllocatedVUs,
       maxVUs: maxVUs,
@@ -97,7 +101,14 @@ export default function () {
     successfulRequests.add(1);
   } else {
     checkFailures.add(1);
-    if (!integrityOk) {
+    // Mutually exclusive categories: transport is not a corrupted HTTP 200.
+    if (res.status === 0) {
+      const error = String(res.error || '').toLowerCase();
+      if (error.includes('timeout') || error.includes('timed out')) timeoutFailures.add(1);
+      else networkFailures.add(1);
+    } else if (!statusOk) {
+      httpStatusFailures.add(1);
+    } else {
       integrityFailures.add(1);
     }
   }
@@ -119,8 +130,11 @@ export function handleSummary(data) {
   const successful = successes.count || 0;
 
   const parsed = {
-    driver: 'k6-open-arrival',
-    rate_offered: rate,
+    schema_version: 2,
+    driver: __ENV.MODE === 'closed' ? 'k6-closed-loop' : 'k6-open-arrival',
+    executor: __ENV.MODE === 'closed' ? 'constant-vus' : 'constant-arrival-rate',
+    rate_offered: __ENV.MODE === 'closed' ? null : rate,
+    warmup_vus: __ENV.MODE === 'closed' ? Number(__ENV.WARMUP_VUS || 32) : null,
     target_url: __ENV.TARGET_URL || '',
     duration_configured: duration,
     elapsed: elapsed,
@@ -135,6 +149,12 @@ export function handleSummary(data) {
     requests_failed: Math.max(0, total - successful),
     errors: Math.max(0, total - successful),
     integrity_errors: integrity.count || 0,
+    failure_counts: {
+      timeout: metrics.timeout_failures ? metrics.timeout_failures.values.count || 0 : 0,
+      network: metrics.network_failures ? metrics.network_failures.values.count || 0 : 0,
+      http_status: metrics.http_status_failures ? metrics.http_status_failures.values.count || 0 : 0,
+      response_integrity: integrity.count || 0,
+    },
     rps: successful / elapsed,
     p95_ms: latency['p(95)'] || 0,
     rps_effective: reqs.rate || 0,
@@ -149,7 +169,7 @@ export function handleSummary(data) {
       p99: latency['p(99)'] || 0,
       max: latency.max || 0,
     },
-    client_saturated: (dropped.count || 0) > 0 || (vus.max || 0) >= maxVUs,
+    client_saturated: (dropped.count || 0) > 0 || (__ENV.MODE !== 'closed' && (vus.max || 0) >= maxVUs),
     raw: data,
   };
 

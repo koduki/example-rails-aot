@@ -14,6 +14,14 @@ import diagnostic
 import run
 
 class DiagnosticUnitTests(unittest.TestCase):
+    def add_capacity_evidence(self, grouped):
+        for target, records in grouped.items():
+            for record in records:
+                t = record['trial']; m = t['measurement']
+                t.update(target=target, repetition=1, capacity_rps=m['rps'])
+                m.update(driver='k6-open-arrival', elapsed=120, rate_offered=m['rps'],
+                         rps_successful=m['rps'], requests_total=120*m['rps'], requests_failed=0)
+
     def test_diagnostic_profile_validity(self):
         profile_path = ROOT / 'bench/profiles/diagnostic.yml'
         self.assertTrue(profile_path.exists())
@@ -72,6 +80,7 @@ class DiagnosticUnitTests(unittest.TestCase):
                                  'diagnostics': {'end': {'compile_mode': 'JIT', 'jvm_compiler': 'OpenJDK 64-Bit Server VM',
                                                          'jvm_compilation_time_ms': 3800, 'jvm_args': ['-Xcompile.mode=JIT']}}}],
         }
+        self.add_capacity_evidence(trials_by_target)
         matrix = diagnostic.analyze_jruby_matrix(trials_by_target, '/articles')
         self.assertEqual(matrix['endpoint'], '/articles')
         # G_Rails = 100 / 50 = 2.0
@@ -104,17 +113,18 @@ class DiagnosticUnitTests(unittest.TestCase):
                                  'diagnostics': {'end': {'yjit_enabled': True, 'yjit_stats': {'compiled_block_count': 600, 'ratio_in_yjit': 0.92},
                                                          'gc_stat': {'total_allocated_objects': 39000}}}}],
         }
+        self.add_capacity_evidence(trials_by_target)
         matrix = diagnostic.analyze_cruby_matrix(trials_by_target, '/articles')
         # G_Rails = 90 / 60 = 1.5
         self.assertEqual(matrix['yjit_speedup_g']['rails'], 1.5)
         # G_emitted = 600 / 300 = 2.0
         self.assertEqual(matrix['yjit_speedup_g']['emitted'], 2.0)
         # Interaction = 2.0 / 1.5 = 1.333
-        self.assertEqual(matrix['yjit_speedup_g']['interaction_ratio'], 1.333)
+        self.assertAlmostEqual(matrix['yjit_speedup_g']['interaction_ratio'], 4/3)
         # Roundhouse speedup with YJIT OFF = 300 / 60 = 5.0
         self.assertEqual(matrix['roundhouse_speedup']['yjit_off'], 5.0)
         # Roundhouse speedup with YJIT ON = 600 / 90 = 6.667
-        self.assertEqual(matrix['roundhouse_speedup']['yjit_on'], 6.667)
+        self.assertAlmostEqual(matrix['roundhouse_speedup']['yjit_on'], 20/3)
 
     def test_missing_diagnostics_handled_gracefully(self):
         trials_by_target = {
@@ -168,9 +178,9 @@ class DiagnosticUnitTests(unittest.TestCase):
 
     def test_failure_taxonomy_classification(self):
         windows = [
-            {'requests_total': 100, 'requests_failed': 90, 'errors': 90, 'latency_ms': {'max': 5001.0, 'p99': 5000.5}},
+            {'requests_total': 100, 'requests_failed': 90, 'errors': 90, 'failure_counts': {'timeout': 90}, 'latency_ms': {'max': 5001.0, 'p99': 5000.5}},
             {'requests_total': 100, 'requests_failed': 0, 'errors': 0, 'latency_ms': {'max': 100.0, 'p99': 50.0}},
-            {'requests_total': 100, 'requests_failed': 10, 'errors': 10, 'latency_ms': {'max': 200.0, 'p99': 150.0}},
+            {'requests_total': 100, 'requests_failed': 10, 'errors': 10, 'failure_counts': {'http_status': 10}, 'latency_ms': {'max': 200.0, 'p99': 150.0}},
         ]
         tax = diagnostic.analyze_failure_taxonomy(windows)
         self.assertEqual(tax['total_windows'], 3)
@@ -178,7 +188,7 @@ class DiagnosticUnitTests(unittest.TestCase):
         self.assertEqual(tax['failed_windows_pct'], 66.67)
         self.assertEqual(tax['total_requests'], 300)
         self.assertEqual(tax['failed_requests'], 100)
-        self.assertEqual(tax['error_rate_pct'], 33.33)
+        self.assertEqual(tax['error_rate_pct'], 33.333)
         self.assertEqual(tax['timeout_failures'], 90)
         self.assertEqual(tax['http_failures'], 10)
 
@@ -192,29 +202,35 @@ class DiagnosticUnitTests(unittest.TestCase):
         q = diagnostic.analyze_concurrency_and_queuing(windows, cpu_start, cpu_end, num_threads=4, target_name='emit-jruby-off')
         self.assertEqual(q['concurrency_vus'], 32)
         self.assertEqual(q['threads'], 4)
-        self.assertEqual(q['estimated_service_time_ms'], 1447.0)
-        # Max theoretical RPS = 4 / 1.447 = 2.76
-        self.assertAlmostEqual(q['max_theoretical_throughput_rps'], 2.76, places=2)
-        # Estimated queue depth = 32 - 4 = 28
-        self.assertEqual(q['estimated_queue_depth'], 28)
-        # Queue delay = 28 * (1447 / 4) = 10129 ms > 5000 ms timeout
-        self.assertGreater(q['estimated_queue_delay_ms'], 5000.0)
-        self.assertIn('Interpreter CPU saturation', q['root_cause'])
+        self.assertIsNone(q['estimated_service_time_ms'])
+        self.assertIsNone(q['max_theoretical_throughput_rps'])
+        self.assertIsNone(q['estimated_queue_depth'])
+        self.assertIsNone(q['estimated_queue_delay_ms'])
+        self.assertEqual(q['observed']['http_min_ms'], 1447.0)
+        self.assertEqual(q['root_cause'], 'unresolved')
+        self.assertIsNone(q['cpu_metrics']['vcpus_active'])  # Historic endpoints lack timestamps.
         self.assertAlmostEqual(q['cpu_metrics']['pct_user'], 99.9, places=1)
 
-    def test_viable_load_envelope(self):
-        # emit-jruby-off with 1447ms service time
-        env_jruby = diagnostic.compute_viable_load_envelope('emit-jruby-off', 1447.0, num_threads=4, slo_p99_ms=100.0)
-        self.assertEqual(env_jruby['status'], 'unsupported_for_capacity_ranking')
-        self.assertFalse(env_jruby['slo_achievable'])
-        self.assertLessEqual(env_jruby['max_viable_concurrency_vus_no_timeout'], 13)
-        self.assertLessEqual(env_jruby['safe_open_arrival_rps'], 2.5)
+    def test_names_and_http_minimum_do_not_create_safe_envelopes(self):
+        for name, latency in [('emit-jruby-off', 1447), ('spinel', 15)]:
+            env = diagnostic.compute_viable_load_envelope(name, latency)
+            self.assertEqual(env['status'], 'unconfirmed')
+            self.assertIsNone(env['slo_achievable'])
+            self.assertIsNone(env['safe_open_arrival_rps'])
+            self.assertIsNone(env['max_viable_concurrency_vus_no_timeout'])
 
-        # spinel with 15ms service time
-        env_spinel = diagnostic.compute_viable_load_envelope('spinel', 15.0, num_threads=4, slo_p99_ms=100.0)
-        self.assertEqual(env_spinel['status'], 'conditionally_viable')
-        self.assertTrue(env_spinel['slo_achievable'])
-        self.assertGreater(env_spinel['safe_open_arrival_rps'], 50.0)
+    def test_historic_latency_does_not_classify_timeouts(self):
+        tax = diagnostic.analyze_failure_taxonomy([
+            {'requests_total': 100, 'requests_failed': 90, 'latency_ms': {'p99': 5001}}])
+        self.assertEqual(tax['unknown_failures'], 90)
+        self.assertEqual(tax['timeout_failures'], 0)
+
+    def test_unpaired_or_fixed_rate_observations_have_no_speedup(self):
+        grouped = {'rails-cruby-off': [{'trial': {'endpoint': '/articles', 'repetition': 1,
+                    'status': 'passed', 'measurement': {'rps': 100}}}]}
+        matrix = diagnostic.analyze_cruby_matrix(grouped, '/articles')
+        self.assertIsNone(matrix['yjit_speedup_g']['rails'])
+
 
 if __name__ == '__main__':
     unittest.main()
