@@ -87,6 +87,7 @@ class C3EvidenceTests(unittest.TestCase):
 
     def test_recovery_probe_is_bounded_and_does_not_certify_queue_drain(self):
         p = self.profile(); p.pop('remote_loadgen', None)
+        p['recovery_health_p99_ms'] = 100
         with tempfile.TemporaryDirectory() as tmp, patch.object(run, 'sample', side_effect=[measurement(1, 200), measurement(1)]):
             run.recover(MagicMock(), '/articles', p, {}, Path(tmp))
             evidence = json.loads((Path(tmp) / 'recovery.json').read_text())

@@ -98,6 +98,10 @@ jobs:
           python3 scripts/bench/load_sweep.py --mode vus --values 1,4 --output bench-results/sweep-plan-vus
           python3 scripts/bench/load_sweep.py --mode rates --values 0.5,1,5 --output bench-results/sweep-plan-rates
 
+          for experiment in matched-rate capacity-cruby capacity-jruby spinel-connections trace-cruby trace-jruby; do
+            python3 scripts/bench/retest_plan.py --experiment "$experiment" --output "bench-results/followup-plan-$experiment"
+          done
+
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: '1.9.8'
