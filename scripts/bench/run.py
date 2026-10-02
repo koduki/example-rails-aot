@@ -111,9 +111,13 @@ def config(path_or_dict):
     if p.get('max_vus', 4096 if p.get('capacity_search') else 50) < p.get(
             'preallocated_vus', 512 if p.get('capacity_search') else 10):
         raise ValueError('max_vus must be >= preallocated_vus')
-    for key in ('socket_observations', 'jfr', 'measurement_slo_required'):
+    for key in ('socket_observations', 'fd_observations', 'jfr', 'measurement_slo_required'):
         if key in p and type(p[key]) is not bool:
             raise ValueError(key + ' must be boolean')
+    if 'container_nofile' in p and (type(p['container_nofile']) is not int or p['container_nofile'] < 1):
+        raise ValueError('container_nofile must be a positive integer')
+    if p.get('fd_observations') and not p.get('socket_observations'):
+        raise ValueError('fd_observations requires socket_observations')
     if 'socket_interval_seconds' in p and (type(p['socket_interval_seconds']) not in (int, float)
             or not math.isfinite(p['socket_interval_seconds']) or p['socket_interval_seconds'] < 1):
         raise ValueError('socket_interval_seconds must be finite and >= 1')
@@ -341,6 +345,8 @@ class Server:
             args += ['-e', 'BENCH_DIAGNOSTICS=1']
         if self.profile.get('jfr'):
             args += ['-e', 'BENCH_JFR=1']
+        if 'container_nofile' in self.profile:
+            args += ['--ulimit', 'nofile={0}:{0}'.format(self.profile['container_nofile'])]
         args += [tag(self.target)]
         save(self.directory / 'launch.json', {'argv': args, 'fixture': self.fixture})
         try:
@@ -361,6 +367,16 @@ class Server:
                     if response['status'] == 200:
                         self.info['ready_seconds'] = time.monotonic()-start
                         save(self.directory/'runtime.json',self.info)
+                        if self.profile.get('fd_observations'):
+                            from observe import process_snapshot
+                            observed_process = process_snapshot(self.name)
+                            save(self.directory/'process-start.json', observed_process)
+                            if observed_process.get('nofile') is None:
+                                raise RuntimeError('Serving process nofile could not be observed')
+                            requested = self.profile.get('container_nofile')
+                            if requested is not None and observed_process.get('nofile') != {
+                                    'soft': str(requested), 'hard': str(requested)}:
+                                raise RuntimeError('Serving process nofile differs from requested limit')
                         limits = self.record_cpu('cpu-start.json')
                         effective = limits.get('cpuset.cpus.effective')
                         if isinstance(effective,str) and cpuset(effective) != set(self.cpus['app']):
@@ -399,7 +415,7 @@ class Server:
             with contextlib.suppress(OSError, RuntimeError, subprocess.TimeoutExpired, ValueError, KeyError, IndexError):
                 inspect = json.loads(command(['docker','inspect',self.name],check=False,timeout=30))[0]
                 save(self.directory/'container.json', {'image':inspect['Image'],'state':inspect['State'],
-                     'host_config':{k:inspect['HostConfig'].get(k) for k in ('CpusetCpus','Memory','MemorySwap')}})
+                     'host_config':{k:inspect['HostConfig'].get(k) for k in ('CpusetCpus','Memory','MemorySwap','Ulimits')}})
         finally:
             command(['docker','rm','-f',self.name],timeout=30)
 
@@ -557,11 +573,13 @@ def sample(server, endpoint, duration, p, cpus, directory=None, rate=None, phase
     evidence = {'schema_version': 1, 'phase': phase, 'started_at': started,
                 'duration_configured_seconds': duration, 'status': 'failed',
                 'diagnostics': bool(p.get('diagnostics')), 'jfr': bool(p.get('jfr')),
-                'socket_observations': bool(p.get('socket_observations'))}
+                'socket_observations': bool(p.get('socket_observations')),
+                'fd_observations': bool(p.get('fd_observations') and phase == 'measurement')}
     try:
         if p.get('socket_observations'):
             from observe import SocketCollector
-            sockets = SocketCollector(server.name, p.get('socket_interval_seconds', 2))
+            options = {'fd_observations': True} if evidence['fd_observations'] else {}
+            sockets = SocketCollector(server.name, p.get('socket_interval_seconds', 2), **options)
             sockets.start()
         measured = _sample(server, endpoint, duration, p, cpus, output, rate, phase)
         evidence.update(status='completed', measurement_elapsed_seconds=measured.get('elapsed'))
@@ -572,7 +590,11 @@ def sample(server, endpoint, duration, p, cpus, directory=None, rate=None, phase
     finally:
         try:
             if sockets:
-                save(output / 'socket-observations.json', sockets.stop())
+                observed = sockets.stop()
+                process_fds = observed.pop('process_fds', None)
+                save(output / 'socket-observations.json', observed)
+                if process_fds is not None:
+                    save(output / 'fd-observations.json', process_fds)
         except BaseException as e:
             evidence.update(status='artifact_error', error=str(e))
             raise

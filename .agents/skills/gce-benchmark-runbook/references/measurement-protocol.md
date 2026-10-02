@@ -18,6 +18,20 @@ The revised four-VU warmup differs from the September 30 release's 32-VU warmup.
 
 ## Diagnostic sweep
 
+For the October 2 follow-up's performance reversal and FD failure, prefer
+[mechanism test instructions](../../../../docs/gce-c3-mechanism-test-instructions-20261003.md).
+Inspect the actual serving generated code first. Use `mechanism_plan.py` for
+same-environment fixture scaling (3/20/1000), app-sliced versus DB-paged output,
+and Spinel pool × actual default/raised nofile controls. Generate plans without
+execution; execute one selected cell with all remote flags and fresh automatic
+preflight for that fixture/route. Inspect each cell before proceeding. Keep
+pool-10 mechanism baselines separate from prior pool-512 baselines. FD evidence
+records actual PID 1 limits and non-atomic descriptor snapshots, not syscall
+errno or HTTP queue drainage. Establish a meaningful limit contrast from the
+default soft limit before selecting the raised value. Do not call the nested
+loop the measured cause without confirming emitted code and observing its cost.
+Existing stage hooks remain unimplemented; preserve that distinction.
+
 Prefer [targeted follow-up instructions](../../../../docs/gce-c3-followup-instructions.md) for the October 1 cohort. `retest_plan.py` prepares bounded main-six matched-rate, split capacity, Spinel pool-control and optional trace experiments. It does not execute without `--execute`; execution requires preflight and all remote flags. Every phase records actual wall time and k6 invocation. Strict fixed-rate profiles require SLO/client integrity and App samples, known zero throttle delta and no OOM. Their successful RPS is rate-limited and never a maximum.
 
 Spinel's control fixes warmup, fresh-container policy and maxVUs while changing preallocatedVUs 10/512 at 10/15/25 RPS. Opt-in socket snapshots cover both cells equally. Retain raw `/proc/net/tcp{,6}` and errors; TCP state/non-listen byte queues are not worker/HTTP queue gauges. The global 4-hour deadline covers six cells; budget failures remain failures. Old diagnostic sweeps below have a different warmup and pool and cannot replace this control.
