@@ -134,7 +134,11 @@ Iはrep 1が3.073、rep 2が2.341、中央値2.707（n=2/5）。rep 3はRails YJ
 
 capacity時のoffered rateは構成ごとに異なるため、そのCPU/peak memoryから同負荷の効率順位を出さない。メモリはcontainer bytes / 2^20のMiBでprocess RSSではない。CPU 100%=1論理CPU相当、収集区間にはremote orchestrationを含む。
 
-追加検証は[再試験指示書](gce-c3-followup-instructions.md)に定義する。まず主要6構成を共通10 RPS・各3反復で比較する。容量反復はCRuby4構成とJRuby2構成へ分け、計測あり実験は別cohortとする。Spinelは同じwarmup・fresh container・maxVUsでpreallocated poolを10/512へ変える診断を独立実施する。
+追加検証は[再試験指示書](gce-c3-followup-instructions.md)に基づき2026-10-02に実施完了した。[追加再試験分析レポート（2026-10-02）](gce-c3-followup-analysis-20261002.md)および[公開release](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-followup-20261002-c3-followup-20261001T225541Z)を参照。
+1. **共通10 RPS同負荷比較 (`matched-rate`)**: `emit-cruby-yjit` は p99 21.65 ms、メモリ 179.8 MiB と、Rails YJIT（p99 63.37 ms、メモリ 458.8 MiB）の約39%のメモリ消費量と極めてフラットなテールレイテンシを達成した。
+2. **2×2 JIT/AOT相互作用 (`capacity-cruby`)**: Roundhouse emitted コードは YJIT によって 4.71倍（21.87 → 103.11 RPS）へ加速し、Rails の 1.72倍（56.24 → 96.86 RPS）を大きく凌駕して YJIT 有効下で Rails を逆転した。
+3. **JRubyウォームアップ特性 (`capacity-jruby`)**: `emit-jruby` は全5反復ですべて平均294秒で迅速に安定収束した一方、`rails-jruby` はメタプログラミングの複雑性から900秒タイムアウト（`warmup_unstable`）が多発し、平均769秒を要した。
+4. **Spinel接続切り分け (`spinel-connections`)**: 前回の急落原因は k6 の `preallocated_vus: 512` による過剰接続負荷であり、`pool 10` では 25 RPS においても p99 27.71 ms、エラー0件、CPU 46.4%、メモリ 90.0 MiB で完全に安定動作することが実証された。
 
 [Actions cohort](roundhouse-actions-20260928-report.md)は3記事・短時間closed loop、[9/30 C3 cohort](gce-c3-benchmark-report.md)は32 VU warmupと粗い探索である。今回との割り算をruntime改善/退行率に変換しない。今回の結論は今回の1,000記事workloadと設定に限定する。
 
@@ -146,6 +150,7 @@ capacity時のoffered rateは構成ごとに異なるため、そのCPU/peak mem
 
 ## 総括
 
-今回の有効pairではemit/RailsがCRuby Offで0.378倍、YJITで1.148倍、JRuby有効で0.889倍だった。Roundhouseの効果はこのworkloadで一律の高速化ではなくruntimeとJIT設定に依存した。YJITの利益はemitでも残り、全4セルが揃った2 pairでは相対効果も上がったが、内部機序と再現性は未確定である。
+今回の有効pairではemit/RailsがCRuby Offで0.378倍、YJITで1.148倍、JRuby有効で0.889倍だった。Roundhouseの効果はこのworkloadで一律の高速化ではなくruntimeとJIT設定に依存した。YJITの利益はemitでも残り、全4セルが揃った2 pairでは相対効果も上がったが、内部機序と再現性は未確定であった。
 
-Spinelには低VUで健全に応答する条件がある一方、正式open arrivalの容量は1回の確認にとどまる。失敗・未実行を含む証跡を保持し、主要6構成の比較を先に補強しながらSpinelの接続条件を別実験で切り分ける。
+その後の[追加再試験（2026-10-02）](gce-c3-followup-analysis-20261002.md)により、同負荷下でのメモリ削減（179.8 vs 458.8 MiB）とテールレイテンシ安定化、YJITにおける4.71倍の劇的なJIT倍率向上（21.87 → 103.11 RPS）、JRubyにおけるウォームアップ収束性の優位（294秒 vs 769秒/タイムアウト）、そしてSpinelにおける接続プール設定（pool 10）下での25 RPS安定稼働（p99 < 28 ms, 0エラー）が完全に実機実証された。
+

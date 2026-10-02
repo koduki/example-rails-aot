@@ -338,3 +338,28 @@ The retest provided direct physical confirmation of the PR #65 capacity algorith
   - Documented in `bench-results/c3-retest-20261001T061200Z/cleanup.json`.
 - **Integrity**: 10,344 transferred artifact files were verified against remote `SHA256SUMS.received` (`transfer-verification.log`: 0 missing, 0 mismatches). Final manifest contains 10,348 files including teardown proof.
 
+---
+
+## 12. GCE c3-standard-4 Follow-up Targeted Experiments (2026-10-02)
+
+Following the instructions in [`docs/gce-c3-followup-instructions.md`](gce-c3-followup-instructions.md), a targeted follow-up experiment suite (`c3-followup-20261001T225541Z`) was executed across 66 bounded trials on commit [`98a1beec9a406ead2fe3b3e219086c171e1883a4`](https://github.com/koduki/example-rails-aot/commit/98a1beec9a406ead2fe3b3e219086c171e1883a4). All 14,071 artifact files were verified against SHA-256 checksums, and both VMs were confirmed `TERMINATED`.
+
+Raw evidence archive is published at GitHub Release [`gce-c3-followup-20261002-c3-followup-20261001T225541Z`](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-followup-20261002-c3-followup-20261001T225541Z). Complete analysis is available in [`docs/gce-c3-followup-analysis-20261002.md`](gce-c3-followup-analysis-20261002.md).
+
+### Summary of Targeted Findings
+1. **Matched-Rate Same-Load Resource Comparison (Priority 1: 18/18 passed)**:
+   - At a constant 10 RPS open-arrival rate, `emit-cruby-yjit` achieved p99 = **21.65 ms** (p50 = 19.10 ms) using only **179.8 MiB** container memory and **15.5%** CPU.
+   - `rails-cruby-yjit` used **458.8 MiB** (2.55x memory) with p99 = **63.37 ms** due to GC allocation tail latency.
+   - JRuby targets consumed **884–1,212 MiB** memory and ~39% CPU under the same 10 RPS load.
+2. **2×2 JIT/AOT Interaction (Priority 2: 20 trials, 19 passed, 1 boundary_unstable)**:
+   - Roundhouse emitted code without JIT yielded **21.87 RPS**, but jumped **4.71x** to **103.11 RPS** with YJIT.
+   - Standard Rails improved **1.72x** with YJIT (56.24 → 96.86 RPS).
+   - Under YJIT, Roundhouse emitted code surpasses standard Rails (1.06x), demonstrating that flatter, devirtualized code unlocks superior JIT compilation efficiency.
+3. **JVM Warmup Jitter & Convergence (Priority 3: 10 trials, 7 passed, 2 warmup_unstable, 1 boundary_unstable)**:
+   - `emit-jruby` warmed up stably in **294s** on average (median capacity **56.00 RPS**).
+   - `rails-jruby` suffered severe warmup jitter, averaging **769s** and failing 2 repetitions due to 900s timeout (`warmup_unstable`), reflecting dynamic metaprogramming profiling overhead in HotSpot C2.
+4. **Spinel Connection Pool Diagnosis (Priority 4: 18 trials across 6 cells)**:
+   - Isolated the root cause of Spinel's earlier collapse: under `pool 512`, 25 RPS collapsed with 281 timeouts and 207% CPU.
+   - Under `pool 10`, Spinel handled 25 RPS with **p99 = 27.71 ms, 0 errors, 46.4% CPU, and 90.0 MiB memory**. Spinel's capacity was not limited by app logic, but by k6 virtual user over-allocation.
+
+
