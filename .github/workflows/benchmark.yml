@@ -102,6 +102,10 @@ jobs:
             python3 scripts/bench/retest_plan.py --experiment "$experiment" --output "bench-results/followup-plan-$experiment"
           done
 
+          for experiment in scaling-cruby scaling-jruby scaling-spinel pagination-cruby pagination-jruby pagination-spinel spinel-fds; do
+            python3 scripts/bench/mechanism_plan.py --experiment "$experiment" --output "bench-results/mechanism-plan-$experiment"
+          done
+
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: '1.9.8'
