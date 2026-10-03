@@ -625,6 +625,9 @@ def _sample(server, endpoint, duration, p, cpus, directory=None, rate=None, phas
         if is_crud:
             env_args += ['-e', f'NUM_ARTICLES={p.get("fixture_articles", 3)}',
                          '-e', f'SCENARIO={p.get("crud_scenario", "mix")}']
+        else:
+            expected_articles = min(p.get('fixture_articles', 20), 20)
+            env_args += ['-e', f'EXPECTED_ARTICLES={expected_articles}']
         env_map = dict(v.split('=', 1) for i, v in enumerate(env_args) if i > 0 and env_args[i-1] == '-e')
         save(output_dir / 'k6-invocation.json', {'script': script_rel, 'environment': env_map,
              'phase': phase, 'load_mode': env_map.get('MODE', 'open'),
