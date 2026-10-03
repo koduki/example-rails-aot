@@ -143,3 +143,18 @@ class MechanismTests(unittest.TestCase):
         self.assertEqual(result['status'], 'unavailable')
         self.assertEqual(result['samples'], [])
         self.assertEqual(len(result['errors']), 1)
+
+    def test_k6_read_passes_expected_articles_matching_fixture(self):
+        server = MagicMock(url='http://127.0.0.1:3000')
+        cpus = {'app': [0], 'client': [1]}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(run, 'RemoteLoadGenerator') as rlg, \
+                patch.object(run, 'validate_k6', return_value={'elapsed': 1}):
+            inst = MagicMock()
+            inst.run.side_effect = lambda *_: (Path(tmp) / 'k6-summary.json').write_text('{}')
+            rlg.return_value = inst
+            for fixture, expected in ((3, '3'), (20, '20'), (1000, '20')):
+                p = {'driver': 'k6', 'k6_script': 'bench/k6/read.js', 'request_timeout': 5,
+                     'fixture_articles': fixture, 'remote_loadgen': 'tester', 'gce_zone': 'z', 'gce_project': 'p'}
+                run._sample(server, '/articles?page=1', 1, p, cpus, directory=tmp)
+                inv = json.loads((Path(tmp) / 'k6-invocation.json').read_text())
+                self.assertEqual(inv['environment']['EXPECTED_ARTICLES'], expected)
