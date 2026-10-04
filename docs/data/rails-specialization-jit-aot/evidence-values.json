@@ -1,0 +1,2948 @@
+{
+  "sources": {
+    "E1": [
+      "小規模CRuby・Spinelの測定",
+      "https://github.com/koduki/example-rails-aot/actions/runs/36380159185"
+    ],
+    "E2": [
+      "小規模JRubyの反復測定",
+      "https://github.com/koduki/example-rails-aot/actions/runs/36362615236"
+    ],
+    "E3": [
+      "C3容量探索の実行記録",
+      "https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-capacity-20260930"
+    ],
+    "E4": [
+      "C3容量探索・負荷方式の測定",
+      "https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-retest-20261001-c3-retest-20261001T061200Z"
+    ],
+    "E5": [
+      "C3同負荷・容量・接続数の測定",
+      "https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-followup-20261002-c3-followup-20261001T225541Z"
+    ],
+    "E6": [
+      "C3件数・ページング・FD上限の測定",
+      "https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-mechanism-20261003-c3-mechanism-20261003T001500Z"
+    ]
+  },
+  "primary_sources": {
+    "R1": [
+      "Rails 8.0 Action View Overview",
+      "https://guides.rubyonrails.org/v8.0.0/action_view_overview.html"
+    ],
+    "R2": [
+      "Ruby 3.4 YJIT公式文書",
+      "https://docs.ruby-lang.org/en/3.4/yjit/yjit_md.html"
+    ],
+    "R3": [
+      "JRuby Compiler / Performance Tuning",
+      "https://github.com/jruby/jruby/wiki/JRubyCompiler"
+    ],
+    "R4": [
+      "Spinel固定版 README",
+      "https://github.com/matz/spinel/blob/112bae85c1a25fc5399009a849f805bfe691426b/README.md"
+    ],
+    "R5": [
+      "Spinel固定版の制約",
+      "https://github.com/matz/spinel/blob/112bae85c1a25fc5399009a849f805bfe691426b/docs/limitations.md"
+    ],
+    "R6": [
+      "Roundhouse固定版のlowering",
+      "https://github.com/rubys/roundhouse/blob/2e286e6f93a970fa7e93a5da2e53ee2d127f7169/docs/pipeline/lower.md"
+    ],
+    "R7": [
+      "Roundhouse固定版のruntime",
+      "https://github.com/rubys/roundhouse/blob/2e286e6f93a970fa7e93a5da2e53ee2d127f7169/docs/pipeline/runtime.md"
+    ],
+    "R8": [
+      "Sam Ruby：特殊化とJRubyの性能仮説",
+      "https://intertwingly.net/blog/2026/06/11/The-Ruby-JRuby-Was-Built-to-Run.html"
+    ],
+    "R9": [
+      "Rails 8.0.5.1の関連付けpreloader",
+      "https://github.com/rails/rails/blob/v8.0.5.1/activerecord/lib/active_record/associations/preloader/association.rb"
+    ],
+    "R10": [
+      "Roundhouse固定版のSpinel HTTP runtime",
+      "https://github.com/rubys/roundhouse/blob/2e286e6f93a970fa7e93a5da2e53ee2d127f7169/runtime/spinel/tep/server_threaded.rb"
+    ],
+    "R11": [
+      "実測sourceのcontroller",
+      "https://github.com/koduki/example-rails-aot/blob/19504f9f1f9e4c53930fbd235fc61116aa63773c/blog/app/controllers/articles_controller.rb"
+    ],
+    "R12": [
+      "生成物への測定用修正",
+      "https://github.com/koduki/example-rails-aot/blob/19504f9f1f9e4c53930fbd235fc61116aa63773c/scripts/bench/emit.py"
+    ],
+    "R13": [
+      "container buildと実行対象",
+      "https://github.com/koduki/example-rails-aot/blob/19504f9f1f9e4c53930fbd235fc61116aa63773c/bench/Dockerfile"
+    ]
+  },
+  "matched_and_capacity": {
+    "matched/emit-cruby-off": {
+      "n_valid": 3,
+      "n_planned": 3,
+      "statuses": {
+        "passed": 3
+      },
+      "warmup_mean": 180.46516048033334,
+      "warmup_median": 180.447053285,
+      "p50_median": 69.379612,
+      "p95_median": 71.078059,
+      "p99_median": 73.60634518,
+      "rps_median": 10.002382291292763,
+      "tester_cpu_pct_median": 1.0679166666666668,
+      "mean_cpu_pct_median": 57.51,
+      "peak_container_memory_bytes_median": 158125260
+    },
+    "matched/emit-cruby-yjit": {
+      "n_valid": 3,
+      "n_planned": 3,
+      "statuses": {
+        "passed": 3
+      },
+      "warmup_mean": 210.16095225,
+      "warmup_median": 180.16987348700002,
+      "p50_median": 19.100188,
+      "p95_median": 19.90228985,
+      "p99_median": 21.653941279999998,
+      "rps_median": 9.999918011255554,
+      "tester_cpu_pct_median": 1.041916666666667,
+      "mean_cpu_pct_median": 15.52,
+      "peak_container_memory_bytes_median": 188533964
+    },
+    "matched/emit-jruby": {
+      "n_valid": 3,
+      "n_planned": 3,
+      "statuses": {
+        "passed": 3
+      },
+      "warmup_mean": 270.344117965,
+      "warmup_median": 240.367261708,
+      "p50_median": 31.014651999999998,
+      "p95_median": 39.991269,
+      "p99_median": 48.853333,
+      "rps_median": 9.999905898468851,
+      "tester_cpu_pct_median": 1.1186666666666665,
+      "mean_cpu_pct_median": 38.75,
+      "peak_container_memory_bytes_median": 927046041
+    },
+    "matched/rails-cruby-off": {
+      "n_valid": 3,
+      "n_planned": 3,
+      "statuses": {
+        "passed": 3
+      },
+      "warmup_mean": 200.23007885766665,
+      "warmup_median": 180.20838923,
+      "p50_median": 33.620202,
+      "p95_median": 35.904919,
+      "p99_median": 71.726209,
+      "rps_median": 10.005189158617407,
+      "tester_cpu_pct_median": 0.9919166666666663,
+      "mean_cpu_pct_median": 28.26,
+      "peak_container_memory_bytes_median": 339843481
+    },
+    "matched/rails-cruby-yjit": {
+      "n_valid": 3,
+      "n_planned": 3,
+      "statuses": {
+        "passed": 3
+      },
+      "warmup_mean": 190.12323986633334,
+      "warmup_median": 180.141060686,
+      "p50_median": 17.89578,
+      "p95_median": 19.429287,
+      "p99_median": 63.36611,
+      "rps_median": 10.006977210964534,
+      "tester_cpu_pct_median": 0.9764166666666666,
+      "mean_cpu_pct_median": 14.98,
+      "peak_container_memory_bytes_median": 481086668
+    },
+    "matched/rails-jruby": {
+      "n_valid": 3,
+      "n_planned": 3,
+      "statuses": {
+        "passed": 3
+      },
+      "warmup_mean": 300.395036621,
+      "warmup_median": 300.40745280600004,
+      "p50_median": 25.905313,
+      "p95_median": 38.73845735,
+      "p99_median": 46.68914021,
+      "rps_median": 9.99992396566146,
+      "tester_cpu_pct_median": 1.0494166666666664,
+      "mean_cpu_pct_median": 39.12,
+      "peak_container_memory_bytes_median": 1271310319
+    },
+    "capacity-cruby/emit-cruby-off": {
+      "n_valid": 5,
+      "n_planned": 5,
+      "statuses": {
+        "passed": 5
+      },
+      "warmup_mean": 240.64976791959998,
+      "warmup_median": 240.662608523,
+      "capacity_median": 21.87012615988301,
+      "capacity_by_rep": {
+        "1": 19.527806784357537,
+        "2": 23.432383010954354,
+        "3": 21.088900123315973,
+        "4": 21.87012615988301,
+        "5": 21.870474938226966
+      },
+      "p50_median": 70.164955,
+      "p95_median": 81.878376,
+      "p99_median": 93.55944805000001,
+      "rps_median": 21.87012615988301,
+      "tester_cpu_pct_median": 1.9012499999999999,
+      "mean_cpu_pct_median": 128.44,
+      "peak_container_memory_bytes_median": 190211686
+    },
+    "capacity-cruby/emit-cruby-yjit": {
+      "n_valid": 5,
+      "n_planned": 5,
+      "statuses": {
+        "passed": 5
+      },
+      "warmup_mean": 216.1493546628,
+      "warmup_median": 180.14036288199998,
+      "capacity_median": 103.11159682356461,
+      "capacity_by_rep": {
+        "1": 96.8605670504976,
+        "2": 106.22858123596937,
+        "3": 103.11564263237166,
+        "4": 80.85122804920952,
+        "5": 103.11159682356461
+      },
+      "p50_median": 27.493469,
+      "p95_median": 46.5148925,
+      "p99_median": 68.6522665,
+      "rps_median": 103.11159682356461,
+      "tester_cpu_pct_median": 8.498083333333334,
+      "mean_cpu_pct_median": 217.3,
+      "peak_container_memory_bytes_median": 221144678
+    },
+    "capacity-cruby/rails-cruby-off": {
+      "n_valid": 5,
+      "n_planned": 5,
+      "statuses": {
+        "passed": 5
+      },
+      "warmup_mean": 234.26180032919999,
+      "warmup_median": 180.209701081,
+      "capacity_median": 56.236193970439224,
+      "capacity_by_rep": {
+        "1": 54.68232694983068,
+        "2": 60.9247044521572,
+        "3": 57.80069060106174,
+        "4": 56.236193970439224,
+        "5": 52.72701150974021
+      },
+      "p50_median": 41.142364,
+      "p95_median": 69.6150756,
+      "p99_median": 97.22465708,
+      "rps_median": 56.236193970439224,
+      "tester_cpu_pct_median": 4.42425,
+      "mean_cpu_pct_median": 189.72,
+      "peak_container_memory_bytes_median": 437046476
+    },
+    "capacity-cruby/rails-cruby-yjit": {
+      "n_valid": 4,
+      "n_planned": 5,
+      "statuses": {
+        "passed": 4,
+        "failed": 1
+      },
+      "warmup_mean": 294.19261899919996,
+      "warmup_median": 360.232917685,
+      "capacity_median": 96.86220694045602,
+      "capacity_by_rep": {
+        "1": 81.72981036486105,
+        "2": 76.46245642844647,
+        "3": null,
+        "4": 115.61329171333507,
+        "5": 111.99460351605097
+      },
+      "p50_median": 21.58453325,
+      "p95_median": 58.782699875,
+      "p99_median": 91.13536565500002,
+      "rps_median": 96.86220694045602,
+      "tester_cpu_pct_median": 7.552375,
+      "mean_cpu_pct_median": 170.85000000000002,
+      "peak_container_memory_bytes_median": 540488499.0
+    },
+    "capacity-jruby/emit-jruby": {
+      "n_valid": 4,
+      "n_planned": 5,
+      "statuses": {
+        "passed": 4,
+        "failed": 1
+      },
+      "warmup_mean": 294.3387628912,
+      "warmup_median": 270.308854343,
+      "capacity_median": 52.38713976782736,
+      "capacity_by_rep": {
+        "1": 59.3655642309258,
+        "2": 48.7750999005568,
+        "3": null,
+        "4": 48.426617458884856,
+        "5": 55.99917963509791
+      },
+      "p50_median": 28.8783195,
+      "p95_median": 57.961097074999984,
+      "p99_median": 82.13472228000002,
+      "rps_median": 52.38713976782736,
+      "tester_cpu_pct_median": 4.278958333333334,
+      "mean_cpu_pct_median": 153.535,
+      "peak_container_memory_bytes_median": 1062207488.0
+    },
+    "capacity-jruby/rails-jruby": {
+      "n_valid": 3,
+      "n_planned": 5,
+      "statuses": {
+        "passed": 3,
+        "unstable": 2
+      },
+      "warmup_mean": 768.8341614388,
+      "warmup_median": 900.8546395840001,
+      "capacity_median": 49.99740777021078,
+      "capacity_by_rep": {
+        "1": 49.99740777021078,
+        "2": 56.24205989783719,
+        "3": null,
+        "4": null,
+        "5": 49.55885952034863
+      },
+      "p50_median": 25.944397,
+      "p95_median": 54.716676,
+      "p99_median": 66.846391,
+      "rps_median": 49.99740777021078,
+      "tester_cpu_pct_median": 3.9298333333333337,
+      "mean_cpu_pct_median": 161.01,
+      "peak_container_memory_bytes_median": 1700807049
+    },
+    "spinel-connections/spinel-r10-pool10": {
+      "n_valid": 3,
+      "n_planned": 3,
+      "statuses": {
+        "passed": 3
+      },
+      "warmup_mean": 370.2537493903333,
+      "warmup_median": 390.2307164260001,
+      "p50_median": 21.114517,
+      "p95_median": 25.723255,
+      "p99_median": 27.994476,
+      "rps_median": 10.006303382833865,
+      "tester_cpu_pct_median": 0.7698333333333329,
+      "mean_cpu_pct_median": 19.98,
+      "peak_container_memory_bytes_median": 91477770
+    },
+    "spinel-connections/spinel-r10-pool512": {
+      "n_valid": 3,
+      "n_planned": 3,
+      "statuses": {
+        "passed": 3
+      },
+      "warmup_mean": 240.17136797533334,
+      "warmup_median": 180.157621415,
+      "p50_median": 20.660706,
+      "p95_median": 27.707665,
+      "p99_median": 48.809639,
+      "rps_median": 10.006452270153169,
+      "tester_cpu_pct_median": 1.1287499999999997,
+      "mean_cpu_pct_median": 20.12,
+      "peak_container_memory_bytes_median": 317194240
+    },
+    "spinel-connections/spinel-r15-pool10": {
+      "n_valid": 3,
+      "n_planned": 3,
+      "statuses": {
+        "passed": 3
+      },
+      "warmup_mean": 240.16442436966665,
+      "warmup_median": 240.152931069,
+      "p50_median": 20.8620415,
+      "p95_median": 25.35181,
+      "p99_median": 27.298856,
+      "rps_median": 14.999927699098496,
+      "tester_cpu_pct_median": 1.166583333333333,
+      "mean_cpu_pct_median": 29.01,
+      "peak_container_memory_bytes_median": 91467284
+    },
+    "spinel-connections/spinel-r15-pool512": {
+      "n_valid": 3,
+      "n_planned": 3,
+      "statuses": {
+        "passed": 3
+      },
+      "warmup_mean": 230.1687526576667,
+      "warmup_median": 180.13915372399998,
+      "p50_median": 20.479263,
+      "p95_median": 24.208781,
+      "p99_median": 56.914357,
+      "rps_median": 15.005395317319724,
+      "tester_cpu_pct_median": 1.4347499999999997,
+      "mean_cpu_pct_median": 29.49,
+      "peak_container_memory_bytes_median": 475529216
+    },
+    "spinel-connections/spinel-r25-pool10": {
+      "n_valid": 3,
+      "n_planned": 3,
+      "statuses": {
+        "passed": 3
+      },
+      "warmup_mean": 280.18244812800003,
+      "warmup_median": 330.217007502,
+      "p50_median": 20.6119685,
+      "p95_median": 24.82218515,
+      "p99_median": 27.705732389999984,
+      "rps_median": 24.99983683481492,
+      "tester_cpu_pct_median": 1.7785833333333336,
+      "mean_cpu_pct_median": 46.41,
+      "peak_container_memory_bytes_median": 94413783
+    },
+    "spinel-connections/spinel-r25-pool512": {
+      "n_valid": 0,
+      "n_planned": 3,
+      "statuses": {
+        "failed": 3
+      },
+      "warmup_mean": 230.15507791099998,
+      "warmup_median": 240.17823049499998
+    }
+  },
+  "paired_matched_and_capacity": {
+    "emit-cruby-off/rails-cruby-off": {
+      "pairs": [
+        {
+          "rep": 1,
+          "a": 19.527806784357537,
+          "b": 54.68232694983068,
+          "ratio": 0.3571136759098362
+        },
+        {
+          "rep": 2,
+          "a": 23.432383010954354,
+          "b": 60.9247044521572,
+          "ratio": 0.38461217369310796
+        },
+        {
+          "rep": 3,
+          "a": 21.088900123315973,
+          "b": 57.80069060106174,
+          "ratio": 0.364855504389572
+        },
+        {
+          "rep": 4,
+          "a": 21.87012615988301,
+          "b": 56.236193970439224,
+          "ratio": 0.38889769409677916
+        },
+        {
+          "rep": 5,
+          "a": 21.870474938226966,
+          "b": 52.72701150974021,
+          "ratio": 0.4147869244246254
+        }
+      ],
+      "n_valid": 5,
+      "median": 0.38461217369310796,
+      "range": [
+        0.3571136759098362,
+        0.4147869244246254
+      ]
+    },
+    "emit-cruby-yjit/rails-cruby-yjit": {
+      "pairs": [
+        {
+          "rep": 1,
+          "a": 96.8605670504976,
+          "b": 81.72981036486105,
+          "ratio": 1.1851314302344431
+        },
+        {
+          "rep": 2,
+          "a": 106.22858123596937,
+          "b": 76.46245642844647,
+          "ratio": 1.389290721196984
+        },
+        {
+          "rep": 4,
+          "a": 80.85122804920952,
+          "b": 115.61329171333507,
+          "ratio": 0.6993246784260877
+        },
+        {
+          "rep": 5,
+          "a": 103.11159682356461,
+          "b": 111.99460351605097,
+          "ratio": 0.9206836185529845
+        }
+      ],
+      "n_valid": 4,
+      "median": 1.0529075243937138,
+      "range": [
+        0.6993246784260877,
+        1.389290721196984
+      ]
+    },
+    "rails-cruby-yjit/rails-cruby-off": {
+      "pairs": [
+        {
+          "rep": 1,
+          "a": 81.72981036486105,
+          "b": 54.68232694983068,
+          "ratio": 1.4946293423073527
+        },
+        {
+          "rep": 2,
+          "a": 76.46245642844647,
+          "b": 60.9247044521572,
+          "ratio": 1.2550320451450154
+        },
+        {
+          "rep": 4,
+          "a": 115.61329171333507,
+          "b": 56.236193970439224,
+          "ratio": 2.055851997631768
+        },
+        {
+          "rep": 5,
+          "a": 111.99460351605097,
+          "b": 52.72701150974021,
+          "ratio": 2.124046106716333
+        }
+      ],
+      "n_valid": 4,
+      "median": 1.7752406699695604,
+      "range": [
+        1.2550320451450154,
+        2.124046106716333
+      ]
+    },
+    "emit-cruby-yjit/emit-cruby-off": {
+      "pairs": [
+        {
+          "rep": 1,
+          "a": 96.8605670504976,
+          "b": 19.527806784357537,
+          "ratio": 4.960135468366388
+        },
+        {
+          "rep": 2,
+          "a": 106.22858123596937,
+          "b": 23.432383010954354,
+          "ratio": 4.533409222028712
+        },
+        {
+          "rep": 3,
+          "a": 103.11564263237166,
+          "b": 21.088900123315973,
+          "ratio": 4.8895694905571006
+        },
+        {
+          "rep": 4,
+          "a": 80.85122804920952,
+          "b": 21.87012615988301,
+          "ratio": 3.696879819445999
+        },
+        {
+          "rep": 5,
+          "a": 103.11159682356461,
+          "b": 21.870474938226966,
+          "ratio": 4.714648269633043
+        }
+      ],
+      "n_valid": 5,
+      "median": 4.714648269633043,
+      "range": [
+        3.696879819445999,
+        4.960135468366388
+      ]
+    },
+    "emit-jruby/rails-jruby": {
+      "pairs": [
+        {
+          "rep": 1,
+          "a": 59.3655642309258,
+          "b": 49.99740777021078,
+          "ratio": 1.1873728434836317
+        },
+        {
+          "rep": 2,
+          "a": 48.7750999005568,
+          "b": 56.24205989783719,
+          "ratio": 0.8672353037772088
+        },
+        {
+          "rep": 5,
+          "a": 55.99917963509791,
+          "b": 49.55885952034863,
+          "ratio": 1.129952952450508
+        }
+      ],
+      "n_valid": 3,
+      "median": 1.129952952450508,
+      "range": [
+        0.8672353037772088,
+        1.1873728434836317
+      ]
+    },
+    "matched:emit-cruby-yjit/rails-cruby-yjit": {
+      "pairs": [
+        {
+          "rep": 1,
+          "p50_ratio": 1.044829155811818,
+          "p99_ratio": 0.3350549453845299,
+          "memory_ratio": 0.4004806626905094,
+          "cpu_ratio": 1.020448548812665
+        },
+        {
+          "rep": 2,
+          "p50_ratio": 1.0561652803063069,
+          "p99_ratio": 0.341727483034701,
+          "memory_ratio": 0.39189189088066767,
+          "cpu_ratio": 1.0505050505050506
+        },
+        {
+          "rep": 3,
+          "p50_ratio": 1.1033742296025228,
+          "p99_ratio": 0.4371965311587901,
+          "memory_ratio": 0.3906521734984025,
+          "cpu_ratio": 1.0360480640854473
+        }
+      ],
+      "medians": {
+        "p50_ratio": 1.0561652803063069,
+        "p99_ratio": 0.341727483034701,
+        "memory_ratio": 0.39189189088066767,
+        "cpu_ratio": 1.0360480640854473
+      }
+    },
+    "matched:emit-cruby-off/rails-cruby-off": {
+      "pairs": [
+        {
+          "rep": 1,
+          "p50_ratio": 2.0617275075104544,
+          "p99_ratio": 1.0123086638816834,
+          "memory_ratio": 0.45870432823463675,
+          "cpu_ratio": 2.0603387438249823
+        },
+        {
+          "rep": 2,
+          "p50_ratio": 2.05924246082757,
+          "p99_ratio": 1.0262126802212566,
+          "memory_ratio": 0.46528848967386843,
+          "cpu_ratio": 2.0258315640481244
+        },
+        {
+          "rep": 3,
+          "p50_ratio": 2.0918548932024916,
+          "p99_ratio": 1.0260170909256083,
+          "memory_ratio": 0.47144630573696933,
+          "cpu_ratio": 2.0598137535816616
+        }
+      ],
+      "medians": {
+        "p50_ratio": 2.0617275075104544,
+        "p99_ratio": 1.0260170909256083,
+        "memory_ratio": 0.46528848967386843,
+        "cpu_ratio": 2.0598137535816616
+      }
+    },
+    "matched:emit-jruby/rails-jruby": {
+      "pairs": [
+        {
+          "rep": 1,
+          "p50_ratio": 1.2676979494287532,
+          "p99_ratio": 1.0530815850389756,
+          "memory_ratio": 0.6689731235240843,
+          "cpu_ratio": 1.047580427142471
+        },
+        {
+          "rep": 2,
+          "p50_ratio": 1.119814077315675,
+          "p99_ratio": 0.9520775711453178,
+          "memory_ratio": 0.8207023824518684,
+          "cpu_ratio": 0.9355828220858897
+        },
+        {
+          "rep": 3,
+          "p50_ratio": 1.1972313169889126,
+          "p99_ratio": 0.9754953586546175,
+          "memory_ratio": 0.7503200223768498,
+          "cpu_ratio": 0.9149976711690732
+        }
+      ],
+      "medians": {
+        "p50_ratio": 1.1972313169889126,
+        "p99_ratio": 0.9754953586546175,
+        "memory_ratio": 0.7503200223768498,
+        "cpu_ratio": 0.9355828220858897
+      }
+    }
+  },
+  "mechanism_aggregates": {
+    "fd-pool10-8192/spinel": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 20.8703335,
+      "p95": 25.434016,
+      "p99": 28.039618,
+      "cpu": 48.3,
+      "peak_cpu": 62.43,
+      "memory_mib": 88.31999969482422,
+      "warmup_seconds": 270.188923293,
+      "rps": 25.001977129233275,
+      "tester_cpu": 1.9418333333333326,
+      "telemetry_seconds": 143.5781388282776,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 20.863728,
+          "p99": 28.039618,
+          "cpu": 48.15,
+          "memory_mib": 88.31999969482422,
+          "failed": 0,
+          "total": 3001,
+          "warmup": 300.228580889,
+          "fd": {
+            "status": "observed",
+            "errors": [],
+            "sample_count": 69,
+            "limits": [
+              [
+                "8192",
+                "8192"
+              ]
+            ],
+            "max_count": 61,
+            "max_fd": 60,
+            "max_sockets": 22,
+            "max_duplicate_socket_fds": 11,
+            "first_count": 41,
+            "last_count": 41,
+            "dup_errors": 0,
+            "server_log_present": true,
+            "start_limits": {
+              "soft": "8192",
+              "hard": "8192"
+            },
+            "tcp_state_max": {
+              "ESTABLISHED": 10,
+              "LISTEN": 1
+            }
+          }
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 20.938129,
+          "p99": 28.582651,
+          "cpu": 48.3,
+          "memory_mib": 89.27999973297119,
+          "failed": 0,
+          "total": 3001,
+          "warmup": 270.188923293,
+          "fd": {
+            "status": "observed",
+            "errors": [],
+            "sample_count": 69,
+            "limits": [
+              [
+                "8192",
+                "8192"
+              ]
+            ],
+            "max_count": 61,
+            "max_fd": 60,
+            "max_sockets": 22,
+            "max_duplicate_socket_fds": 11,
+            "first_count": 41,
+            "last_count": 41,
+            "dup_errors": 0,
+            "server_log_present": true,
+            "start_limits": {
+              "soft": "8192",
+              "hard": "8192"
+            },
+            "tcp_state_max": {
+              "ESTABLISHED": 10,
+              "LISTEN": 1
+            }
+          }
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 20.8703335,
+          "p99": 27.569631369999957,
+          "cpu": 48.77,
+          "memory_mib": 86.39999961853027,
+          "failed": 0,
+          "total": 3000,
+          "warmup": 180.16017605900004,
+          "fd": {
+            "status": "observed",
+            "errors": [],
+            "sample_count": 68,
+            "limits": [
+              [
+                "8192",
+                "8192"
+              ]
+            ],
+            "max_count": 61,
+            "max_fd": 60,
+            "max_sockets": 22,
+            "max_duplicate_socket_fds": 11,
+            "first_count": 41,
+            "last_count": 41,
+            "dup_errors": 0,
+            "server_log_present": true,
+            "start_limits": {
+              "soft": "8192",
+              "hard": "8192"
+            },
+            "tcp_state_max": {
+              "ESTABLISHED": 10,
+              "LISTEN": 1
+            }
+          }
+        }
+      ]
+    },
+    "fd-pool10-default/spinel": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 20.947347,
+      "p95": 25.917031,
+      "p99": 28.160291,
+      "cpu": 48.17,
+      "peak_cpu": 61.94,
+      "memory_mib": 88.77999973297119,
+      "warmup_seconds": 210.13415468800002,
+      "rps": 25.003790085707486,
+      "tester_cpu": 1.8553333333333335,
+      "telemetry_seconds": 143.57302856445312,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 20.947347,
+          "p99": 29.042757,
+          "cpu": 48.17,
+          "memory_mib": 86.76999950408936,
+          "failed": 0,
+          "total": 3001,
+          "warmup": 210.13415468800002,
+          "fd": {
+            "status": "observed",
+            "errors": [],
+            "sample_count": 69,
+            "limits": [
+              [
+                "1024",
+                "524288"
+              ]
+            ],
+            "max_count": 61,
+            "max_fd": 60,
+            "max_sockets": 22,
+            "max_duplicate_socket_fds": 11,
+            "first_count": 41,
+            "last_count": 41,
+            "dup_errors": 0,
+            "server_log_present": true,
+            "start_limits": {
+              "soft": "1024",
+              "hard": "524288"
+            },
+            "tcp_state_max": {
+              "ESTABLISHED": 10,
+              "LISTEN": 1
+            }
+          }
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 20.842764,
+          "p99": 27.664477,
+          "cpu": 48.04,
+          "memory_mib": 88.77999973297119,
+          "failed": 0,
+          "total": 3001,
+          "warmup": 180.13134698399998,
+          "fd": {
+            "status": "observed",
+            "errors": [],
+            "sample_count": 69,
+            "limits": [
+              [
+                "1024",
+                "524288"
+              ]
+            ],
+            "max_count": 61,
+            "max_fd": 60,
+            "max_sockets": 22,
+            "max_duplicate_socket_fds": 11,
+            "first_count": 41,
+            "last_count": 41,
+            "dup_errors": 0,
+            "server_log_present": true,
+            "start_limits": {
+              "soft": "1024",
+              "hard": "524288"
+            },
+            "tcp_state_max": {
+              "ESTABLISHED": 10,
+              "LISTEN": 1
+            }
+          }
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 21.023931,
+          "p99": 28.160291,
+          "cpu": 48.35,
+          "memory_mib": 90.28999996185303,
+          "failed": 0,
+          "total": 3001,
+          "warmup": 330.245278424,
+          "fd": {
+            "status": "observed",
+            "errors": [],
+            "sample_count": 69,
+            "limits": [
+              [
+                "1024",
+                "524288"
+              ]
+            ],
+            "max_count": 61,
+            "max_fd": 60,
+            "max_sockets": 22,
+            "max_duplicate_socket_fds": 11,
+            "first_count": 41,
+            "last_count": 41,
+            "dup_errors": 0,
+            "server_log_present": true,
+            "start_limits": {
+              "soft": "1024",
+              "hard": "524288"
+            },
+            "tcp_state_max": {
+              "ESTABLISHED": 10,
+              "LISTEN": 1
+            }
+          }
+        }
+      ]
+    },
+    "fd-pool512-8192/spinel": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 20.521782,
+      "p95": 31.340679,
+      "p99": 84.422827,
+      "cpu": 48.13,
+      "peak_cpu": 73.62,
+      "memory_mib": 633.3999996185303,
+      "warmup_seconds": 180.134059122,
+      "rps": 25.0027355267157,
+      "tester_cpu": 2.349666666666666,
+      "telemetry_seconds": 143.5922257900238,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 20.521782,
+          "p99": 84.97306951999906,
+          "cpu": 48.13,
+          "memory_mib": 633.3999996185303,
+          "failed": 0,
+          "total": 3000,
+          "warmup": 300.225024599,
+          "fd": {
+            "status": "observed",
+            "errors": [],
+            "sample_count": 69,
+            "limits": [
+              [
+                "8192",
+                "8192"
+              ]
+            ],
+            "max_count": 1065,
+            "max_fd": 1064,
+            "max_sockets": 1026,
+            "max_duplicate_socket_fds": 513,
+            "first_count": 41,
+            "last_count": 41,
+            "dup_errors": 0,
+            "server_log_present": true,
+            "start_limits": {
+              "soft": "8192",
+              "hard": "8192"
+            },
+            "tcp_state_max": {
+              "ESTABLISHED": 512,
+              "LISTEN": 1
+            }
+          }
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 20.609922,
+          "p99": 79.505133,
+          "cpu": 48.27,
+          "memory_mib": 610.2999992370605,
+          "failed": 0,
+          "total": 3001,
+          "warmup": 180.134059122,
+          "fd": {
+            "status": "observed",
+            "errors": [],
+            "sample_count": 68,
+            "limits": [
+              [
+                "8192",
+                "8192"
+              ]
+            ],
+            "max_count": 1065,
+            "max_fd": 1064,
+            "max_sockets": 1026,
+            "max_duplicate_socket_fds": 513,
+            "first_count": 41,
+            "last_count": 41,
+            "dup_errors": 0,
+            "server_log_present": true,
+            "start_limits": {
+              "soft": "8192",
+              "hard": "8192"
+            },
+            "tcp_state_max": {
+              "ESTABLISHED": 512,
+              "LISTEN": 1
+            }
+          }
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 20.416699,
+          "p99": 84.422827,
+          "cpu": 47.58,
+          "memory_mib": 635.0,
+          "failed": 0,
+          "total": 3001,
+          "warmup": 180.089304915,
+          "fd": {
+            "status": "observed",
+            "errors": [],
+            "sample_count": 69,
+            "limits": [
+              [
+                "8192",
+                "8192"
+              ]
+            ],
+            "max_count": 1065,
+            "max_fd": 1064,
+            "max_sockets": 1026,
+            "max_duplicate_socket_fds": 513,
+            "first_count": 41,
+            "last_count": 41,
+            "dup_errors": 0,
+            "server_log_present": true,
+            "start_limits": {
+              "soft": "8192",
+              "hard": "8192"
+            },
+            "tcp_state_max": {
+              "ESTABLISHED": 512,
+              "LISTEN": 1
+            }
+          }
+        }
+      ]
+    },
+    "fd-pool512-default/spinel": {
+      "n_pass": 0,
+      "n": 3,
+      "p50": 25.572388,
+      "p95": 76.455085,
+      "p99": 5000.45181201,
+      "cpu": 206.81,
+      "peak_cpu": 294.08,
+      "memory_mib": 627.5999994277954,
+      "warmup_seconds": 270.190395172,
+      "rps": 23.263080887094077,
+      "tester_cpu": 2.1599999999999997,
+      "telemetry_seconds": 148.06659245491028,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "failed",
+          "p50": 25.397998,
+          "p99": 5000.401838,
+          "cpu": 207.86,
+          "memory_mib": 622.8999996185303,
+          "failed": 94,
+          "total": 3001,
+          "warmup": 270.190395172,
+          "fd": {
+            "status": "observed",
+            "errors": [],
+            "sample_count": 71,
+            "limits": [
+              [
+                "1024",
+                "524288"
+              ]
+            ],
+            "max_count": 1024,
+            "max_fd": 1023,
+            "max_sockets": 985,
+            "max_duplicate_socket_fds": 492,
+            "first_count": 41,
+            "last_count": 42,
+            "dup_errors": 1,
+            "server_log_present": true,
+            "start_limits": {
+              "soft": "1024",
+              "hard": "524288"
+            },
+            "tcp_state_max": {
+              "ESTABLISHED": 512,
+              "LISTEN": 1,
+              "CLOSE_WAIT": 88
+            }
+          }
+        },
+        {
+          "rep": 2,
+          "status": "failed",
+          "p50": 25.572388,
+          "p99": 5000.45181201,
+          "cpu": 206.81,
+          "memory_mib": 630.5,
+          "failed": 93,
+          "total": 3000,
+          "warmup": 570.437272368,
+          "fd": {
+            "status": "observed",
+            "errors": [],
+            "sample_count": 70,
+            "limits": [
+              [
+                "1024",
+                "524288"
+              ]
+            ],
+            "max_count": 1024,
+            "max_fd": 1023,
+            "max_sockets": 985,
+            "max_duplicate_socket_fds": 492,
+            "first_count": 41,
+            "last_count": 42,
+            "dup_errors": 1,
+            "server_log_present": true,
+            "start_limits": {
+              "soft": "1024",
+              "hard": "524288"
+            },
+            "tcp_state_max": {
+              "ESTABLISHED": 512,
+              "LISTEN": 1,
+              "CLOSE_WAIT": 89
+            }
+          }
+        },
+        {
+          "rep": 3,
+          "status": "failed",
+          "p50": 25.8020245,
+          "p99": 5000.49484844,
+          "cpu": 206.66,
+          "memory_mib": 627.5999994277954,
+          "failed": 94,
+          "total": 3000,
+          "warmup": 210.133762127,
+          "fd": {
+            "status": "observed",
+            "errors": [],
+            "sample_count": 70,
+            "limits": [
+              [
+                "1024",
+                "524288"
+              ]
+            ],
+            "max_count": 1024,
+            "max_fd": 1023,
+            "max_sockets": 985,
+            "max_duplicate_socket_fds": 492,
+            "first_count": 41,
+            "last_count": 42,
+            "dup_errors": 1,
+            "server_log_present": true,
+            "start_limits": {
+              "soft": "1024",
+              "hard": "524288"
+            },
+            "tcp_state_max": {
+              "ESTABLISHED": 512,
+              "LISTEN": 1,
+              "CLOSE_WAIT": 89
+            }
+          }
+        }
+      ]
+    },
+    "pagination-cruby-appsliced/emit-cruby-off": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 69.4909665,
+      "p95": 71.2321025,
+      "p99": 73.86629788,
+      "cpu": 58.06,
+      "peak_cpu": 70.87,
+      "memory_mib": 138.79999923706055,
+      "warmup_seconds": 180.421763865,
+      "rps": 10.002368523138777,
+      "tester_cpu": 0.8764999999999998,
+      "telemetry_seconds": 141.5594551563263,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 69.28254,
+          "p99": 73.820406,
+          "cpu": 58.06,
+          "memory_mib": 138.5,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.421763865,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 69.4909665,
+          "p99": 73.86629788,
+          "cpu": 58.26,
+          "memory_mib": 138.79999923706055,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.459040029,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 69.668011,
+          "p99": 74.055833,
+          "cpu": 57.44,
+          "memory_mib": 140.69999980926514,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.417371858,
+          "fd": null
+        }
+      ]
+    },
+    "pagination-cruby-appsliced/emit-cruby-yjit": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 19.161419,
+      "p95": 19.949038,
+      "p99": 21.800553,
+      "cpu": 15.62,
+      "peak_cpu": 19.75,
+      "memory_mib": 180.0,
+      "warmup_seconds": 180.153520817,
+      "rps": 10.006727457463482,
+      "tester_cpu": 0.9134999999999994,
+      "telemetry_seconds": 141.50931000709534,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 19.198686,
+          "p99": 21.179552,
+          "cpu": 15.62,
+          "memory_mib": 180.5,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.153520817,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 19.153955,
+          "p99": 21.800553,
+          "cpu": 15.76,
+          "memory_mib": 180.0,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 270.206729849,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 19.161419,
+          "p99": 24.339595,
+          "cpu": 15.55,
+          "memory_mib": 179.19999980926514,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.137095624,
+          "fd": null
+        }
+      ]
+    },
+    "pagination-cruby-appsliced/rails-cruby-off": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 34.341370999999995,
+      "p95": 36.333838,
+      "p99": 72.29161739,
+      "cpu": 28.35,
+      "peak_cpu": 37.84,
+      "memory_mib": 317.19999980926514,
+      "warmup_seconds": 180.23467697400002,
+      "rps": 10.005271168981805,
+      "tester_cpu": 0.8445833333333329,
+      "telemetry_seconds": 143.54415822029114,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 33.800688,
+          "p99": 36.681925,
+          "cpu": 27.32,
+          "memory_mib": 317.5999994277954,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.207482692,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 34.389798,
+          "p99": 72.700234,
+          "cpu": 28.53,
+          "memory_mib": 317.19999980926514,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.23467697400002,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 34.341370999999995,
+          "p99": 72.29161739,
+          "cpu": 28.35,
+          "memory_mib": 317.0,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 210.253711012,
+          "fd": null
+        }
+      ]
+    },
+    "pagination-cruby-appsliced/rails-cruby-yjit": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 18.415340999999998,
+      "p95": 19.27432305,
+      "p99": 20.854886,
+      "cpu": 14.14,
+      "peak_cpu": 18.19,
+      "memory_mib": 453.5,
+      "warmup_seconds": 180.12289025500002,
+      "rps": 10.006637054583924,
+      "tester_cpu": 0.8300833333333327,
+      "telemetry_seconds": 141.5325231552124,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 18.415340999999998,
+          "p99": 63.62943489,
+          "cpu": 14.85,
+          "memory_mib": 452.3999996185303,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.113215728,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 18.474542,
+          "p99": 20.854886,
+          "cpu": 14.04,
+          "memory_mib": 460.5,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 360.25398160099996,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 18.23334,
+          "p99": 20.542814,
+          "cpu": 14.14,
+          "memory_mib": 453.5,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.12289025500002,
+          "fd": null
+        }
+      ]
+    },
+    "pagination-cruby-dbpaged/emit-cruby-off": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 1.4767595,
+      "p95": 1.9208688999999999,
+      "p99": 2.653723,
+      "cpu": 1.2,
+      "peak_cpu": 1.65,
+      "memory_mib": 140.89999961853027,
+      "warmup_seconds": 180.012806309,
+      "rps": 10.008042576177596,
+      "tester_cpu": 0.9360833333333326,
+      "telemetry_seconds": 143.5275046825409,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 1.49249,
+          "p99": 2.653723,
+          "cpu": 1.2,
+          "memory_mib": 142.19999980926514,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.012806309,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 1.4767595,
+          "p99": 2.66531786,
+          "cpu": 1.2,
+          "memory_mib": 140.5999994277954,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.01217512300002,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 1.473168,
+          "p99": 2.562498,
+          "cpu": 1.21,
+          "memory_mib": 140.89999961853027,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.016067885,
+          "fd": null
+        }
+      ]
+    },
+    "pagination-cruby-dbpaged/emit-cruby-yjit": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 1.1409185,
+      "p95": 1.6288954999999923,
+      "p99": 2.2689019100000003,
+      "cpu": 0.89,
+      "peak_cpu": 1.29,
+      "memory_mib": 183.39999961853027,
+      "warmup_seconds": 180.012153599,
+      "rps": 9.999964735207694,
+      "tester_cpu": 0.8489166666666661,
+      "telemetry_seconds": 143.51372385025024,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 1.1409185,
+          "p99": 2.2689019100000003,
+          "cpu": 0.91,
+          "memory_mib": 183.39999961853027,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.012153599,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 1.1493085,
+          "p99": 2.2670623599999997,
+          "cpu": 0.89,
+          "memory_mib": 183.69999980926514,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.012433424,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 1.135541,
+          "p99": 2.308955,
+          "cpu": 0.88,
+          "memory_mib": 182.5,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.007441048,
+          "fd": null
+        }
+      ]
+    },
+    "pagination-cruby-dbpaged/rails-cruby-off": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 8.995906,
+      "p95": 10.6729792,
+      "p99": 11.270057600000001,
+      "cpu": 7.53,
+      "peak_cpu": 9.78,
+      "memory_mib": 315.5,
+      "warmup_seconds": 180.08302778799998,
+      "rps": 9.999910525550575,
+      "tester_cpu": 0.7941666666666658,
+      "telemetry_seconds": 143.52193474769592,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 9.107475,
+          "p99": 11.33083497,
+          "cpu": 7.53,
+          "memory_mib": 315.5,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.08302778799998,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 8.9699975,
+          "p99": 11.17742538,
+          "cpu": 7.43,
+          "memory_mib": 321.0,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.069827136,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 8.995906,
+          "p99": 11.270057600000001,
+          "cpu": 7.63,
+          "memory_mib": 315.5,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 270.088925985,
+          "fd": null
+        }
+      ]
+    },
+    "pagination-cruby-dbpaged/rails-cruby-yjit": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 4.946603,
+      "p95": 6.517362,
+      "p99": 6.969559,
+      "cpu": 4.19,
+      "peak_cpu": 5.54,
+      "memory_mib": 461.19999980926514,
+      "warmup_seconds": 240.08203337300003,
+      "rps": 10.00774115719173,
+      "tester_cpu": 0.8301666666666662,
+      "telemetry_seconds": 141.49658489227295,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 5.057831,
+          "p99": 6.925872,
+          "cpu": 4.25,
+          "memory_mib": 462.0999994277954,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 330.074997831,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 4.937881,
+          "p99": 7.326397,
+          "cpu": 4.17,
+          "memory_mib": 461.19999980926514,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 240.08203337300003,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 4.946603,
+          "p99": 6.969559,
+          "cpu": 4.19,
+          "memory_mib": 453.5,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.035889118,
+          "fd": null
+        }
+      ]
+    },
+    "scaling-cruby-n1000/emit-cruby-off": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 69.730938,
+      "p95": 72.97799475,
+      "p99": 76.360799,
+      "cpu": 58.46,
+      "peak_cpu": 72.45,
+      "memory_mib": 148.5999994277954,
+      "warmup_seconds": 180.470675504,
+      "rps": 10.002319290908702,
+      "tester_cpu": 0.901333333333333,
+      "telemetry_seconds": 141.58469223976135,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 70.388668,
+          "p99": 74.90580066999999,
+          "cpu": 59.17,
+          "memory_mib": 150.19999980926514,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.470675504,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 69.730938,
+          "p99": 76.360799,
+          "cpu": 57.67,
+          "memory_mib": 145.5,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 210.612054116,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 69.551632,
+          "p99": 76.593786,
+          "cpu": 58.46,
+          "memory_mib": 148.5999994277954,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.393945113,
+          "fd": null
+        }
+      ]
+    },
+    "scaling-cruby-n1000/emit-cruby-yjit": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 19.139403,
+      "p95": 19.980449,
+      "p99": 22.55061201,
+      "cpu": 15.5,
+      "peak_cpu": 20.66,
+      "memory_mib": 180.39999961853027,
+      "warmup_seconds": 180.140770318,
+      "rps": 10.006545797513994,
+      "tester_cpu": 0.9485833333333326,
+      "telemetry_seconds": 143.5400106906891,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 19.277639,
+          "p99": 25.381603,
+          "cpu": 15.5,
+          "memory_mib": 180.39999961853027,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.140770318,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 19.139403,
+          "p99": 21.880331,
+          "cpu": 15.36,
+          "memory_mib": 180.39999961853027,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 270.217156799,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 19.1125635,
+          "p99": 22.55061201,
+          "cpu": 15.51,
+          "memory_mib": 179.0,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.13739911399998,
+          "fd": null
+        }
+      ]
+    },
+    "scaling-cruby-n1000/rails-cruby-off": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 34.613441,
+      "p95": 36.135037,
+      "p99": 73.291519,
+      "cpu": 28.72,
+      "peak_cpu": 38.47,
+      "memory_mib": 317.5999994277954,
+      "warmup_seconds": 180.210044647,
+      "rps": 10.005613532670921,
+      "tester_cpu": 0.7927499999999995,
+      "telemetry_seconds": 141.53571557998657,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 34.609244,
+          "p99": 73.418531,
+          "cpu": 28.83,
+          "memory_mib": 322.29999923706055,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.210044647,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 34.613441,
+          "p99": 37.665767,
+          "cpu": 28.11,
+          "memory_mib": 317.5999994277954,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 240.262659637,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 34.656899,
+          "p99": 73.291519,
+          "cpu": 28.72,
+          "memory_mib": 316.69999980926514,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.20873981199998,
+          "fd": null
+        }
+      ]
+    },
+    "scaling-cruby-n1000/rails-cruby-yjit": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 18.525724,
+      "p95": 19.32456075,
+      "p99": 20.728288699999997,
+      "cpu": 14.08,
+      "peak_cpu": 17.81,
+      "memory_mib": 452.29999923706055,
+      "warmup_seconds": 180.116778567,
+      "rps": 9.999959995576702,
+      "tester_cpu": 0.8605833333333328,
+      "telemetry_seconds": 143.54211902618408,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 18.440556,
+          "p99": 20.773373,
+          "cpu": 14.08,
+          "memory_mib": 451.0,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.112794603,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 18.5481475,
+          "p99": 20.728288699999997,
+          "cpu": 14.35,
+          "memory_mib": 456.3999996185303,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.116778567,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 18.525724,
+          "p99": 20.51424654,
+          "cpu": 14.0,
+          "memory_mib": 452.29999923706055,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.12786220200002,
+          "fd": null
+        }
+      ]
+    },
+    "scaling-cruby-n20/emit-cruby-off": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 1.376983,
+      "p95": 2.28293195,
+      "p99": 2.498508,
+      "cpu": 1.11,
+      "peak_cpu": 1.69,
+      "memory_mib": 132.79999923706055,
+      "warmup_seconds": 180.01189166,
+      "rps": 10.008024504462172,
+      "tester_cpu": 0.8800833333333329,
+      "telemetry_seconds": 141.50423526763916,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 1.3741605,
+          "p99": 2.4554681400000002,
+          "cpu": 1.11,
+          "memory_mib": 132.79999923706055,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.010307716,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 1.376983,
+          "p99": 2.498508,
+          "cpu": 1.11,
+          "memory_mib": 133.29999923706055,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.01189166,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 1.402581,
+          "p99": 2.505724,
+          "cpu": 1.16,
+          "memory_mib": 132.19999980926514,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.012561624,
+          "fd": null
+        }
+      ]
+    },
+    "scaling-cruby-n20/emit-cruby-yjit": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 1.030159,
+      "p95": 2.022594,
+      "p99": 2.143866,
+      "cpu": 0.81,
+      "peak_cpu": 1.19,
+      "memory_mib": 175.79999923706055,
+      "warmup_seconds": 180.012434411,
+      "rps": 10.008017092586629,
+      "tester_cpu": 0.8214999999999992,
+      "telemetry_seconds": 143.5159351825714,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 1.033169,
+          "p99": 2.16805,
+          "cpu": 0.82,
+          "memory_mib": 174.69999980926514,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.00992095600003,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 1.029576,
+          "p99": 2.1418523199999995,
+          "cpu": 0.8,
+          "memory_mib": 175.79999923706055,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.012434411,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 1.030159,
+          "p99": 2.143866,
+          "cpu": 0.81,
+          "memory_mib": 176.0999994277954,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.01252536599998,
+          "fd": null
+        }
+      ]
+    },
+    "scaling-cruby-n20/rails-cruby-off": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 8.486343,
+      "p95": 10.449985,
+      "p99": 10.77872256,
+      "cpu": 7.12,
+      "peak_cpu": 10.05,
+      "memory_mib": 313.8999996185303,
+      "warmup_seconds": 300.11124411500003,
+      "rps": 9.999988711846076,
+      "tester_cpu": 0.8449999999999995,
+      "telemetry_seconds": 143.54192304611206,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 8.449393,
+          "p99": 12.09781383,
+          "cpu": 7.08,
+          "memory_mib": 313.8999996185303,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 300.11124411500003,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 8.486343,
+          "p99": 10.721552,
+          "cpu": 7.12,
+          "memory_mib": 303.3999996185303,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.050941513,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 8.6735245,
+          "p99": 10.77872256,
+          "cpu": 7.2,
+          "memory_mib": 314.19999980926514,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 510.14927727099996,
+          "fd": null
+        }
+      ]
+    },
+    "scaling-cruby-n20/rails-cruby-yjit": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 4.614757,
+      "p95": 6.083815,
+      "p99": 6.553188,
+      "cpu": 3.86,
+      "peak_cpu": 4.95,
+      "memory_mib": 444.79999923706055,
+      "warmup_seconds": 180.051195249,
+      "rps": 10.007626526195812,
+      "tester_cpu": 0.8256666666666661,
+      "telemetry_seconds": 141.50477743148804,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 4.5626155,
+          "p99": 6.5405853800000004,
+          "cpu": 3.84,
+          "memory_mib": 447.0,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 210.04203547800003,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 4.614757,
+          "p99": 6.553188,
+          "cpu": 3.86,
+          "memory_mib": 444.69999980926514,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.051195249,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 4.648591,
+          "p99": 6.680235,
+          "cpu": 3.94,
+          "memory_mib": 444.79999923706055,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.038981803,
+          "fd": null
+        }
+      ]
+    },
+    "scaling-cruby-n3/emit-cruby-off": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 1.034459,
+      "p95": 1.248173,
+      "p99": 2.145328,
+      "cpu": 0.84,
+      "peak_cpu": 1.34,
+      "memory_mib": 131.5,
+      "warmup_seconds": 180.005554549,
+      "rps": 10.00814495685971,
+      "tester_cpu": 0.40333333333333304,
+      "telemetry_seconds": 141.49794459342957,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 1.034459,
+          "p99": 2.165088,
+          "cpu": 0.84,
+          "memory_mib": 131.5,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.005013184,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 1.050133,
+          "p99": 2.145328,
+          "cpu": 0.84,
+          "memory_mib": 133.79999923706055,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.006059432,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 1.004518,
+          "p99": 2.137846,
+          "cpu": 0.83,
+          "memory_mib": 131.0999994277954,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.005554549,
+          "fd": null
+        }
+      ]
+    },
+    "scaling-cruby-n3/emit-cruby-yjit": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 0.782702,
+      "p95": 1.000156,
+      "p99": 1.99654,
+      "cpu": 0.61,
+      "peak_cpu": 1.08,
+      "memory_mib": 172.19999980926514,
+      "warmup_seconds": 180.00624179099998,
+      "rps": 10.008069134736475,
+      "tester_cpu": 0.44541666666666646,
+      "telemetry_seconds": 141.50906038284302,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 0.809592,
+          "p99": 2.00377,
+          "cpu": 0.63,
+          "memory_mib": 171.5,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.00709925099997,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 0.782702,
+          "p99": 1.99654,
+          "cpu": 0.61,
+          "memory_mib": 172.19999980926514,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.00624179099998,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 0.750104,
+          "p99": 1.9741197299999997,
+          "cpu": 0.59,
+          "memory_mib": 173.19999980926514,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.004531522,
+          "fd": null
+        }
+      ]
+    },
+    "scaling-cruby-n3/rails-cruby-off": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 5.024588,
+      "p95": 5.813518,
+      "p99": 6.669228,
+      "cpu": 4.17,
+      "peak_cpu": 5.5,
+      "memory_mib": 317.0,
+      "warmup_seconds": 180.026731461,
+      "rps": 9.999963593799208,
+      "tester_cpu": 0.43516666666666654,
+      "telemetry_seconds": 143.52624416351318,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 5.079746,
+          "p99": 6.96170953,
+          "cpu": 4.21,
+          "memory_mib": 317.0999994277954,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.026258629,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 5.024588,
+          "p99": 6.669228,
+          "cpu": 4.17,
+          "memory_mib": 317.0,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.026731461,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 4.9512495,
+          "p99": 6.65321431,
+          "cpu": 4.15,
+          "memory_mib": 314.29999923706055,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 210.03303906600001,
+          "fd": null
+        }
+      ]
+    },
+    "scaling-cruby-n3/rails-cruby-yjit": {
+      "n_pass": 3,
+      "n": 3,
+      "p50": 2.817228,
+      "p95": 3.506923,
+      "p99": 4.513378,
+      "cpu": 2.37,
+      "peak_cpu": 3.4,
+      "memory_mib": 460.29999923706055,
+      "warmup_seconds": 180.01638548500003,
+      "rps": 10.007945798900744,
+      "tester_cpu": 0.4349999999999998,
+      "telemetry_seconds": 143.5197937488556,
+      "reps": [
+        {
+          "rep": 1,
+          "status": "passed",
+          "p50": 2.817228,
+          "p99": 4.513378,
+          "cpu": 2.37,
+          "memory_mib": 460.5,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.01787056199998,
+          "fd": null
+        },
+        {
+          "rep": 2,
+          "status": "passed",
+          "p50": 2.848009,
+          "p99": 4.517065,
+          "cpu": 2.41,
+          "memory_mib": 457.79999923706055,
+          "failed": 0,
+          "total": 1201,
+          "warmup": 180.01638548500003,
+          "fd": null
+        },
+        {
+          "rep": 3,
+          "status": "passed",
+          "p50": 2.7796374999999998,
+          "p99": 4.46213042,
+          "cpu": 2.34,
+          "memory_mib": 460.29999923706055,
+          "failed": 0,
+          "total": 1200,
+          "warmup": 180.015657186,
+          "fd": null
+        }
+      ]
+    }
+  },
+  "paired_mechanism": [
+    {
+      "cohort": "pagination-cruby-appsliced",
+      "a": "emit-cruby-off",
+      "b": "rails-cruby-off",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 2.049737567471999,
+          "p99": 2.012446347894774,
+          "cpu": 2.1251830161054173,
+          "memory_mib": 0.43608312421136264
+        },
+        {
+          "rep": 2,
+          "p50": 2.0206855096968,
+          "p99": 1.0160393414964801,
+          "cpu": 2.042060988433228,
+          "memory_mib": 0.437578812485883
+        },
+        {
+          "rep": 3,
+          "p50": 2.02869043871312,
+          "p99": 1.0244041518739633,
+          "cpu": 2.026102292768959,
+          "memory_mib": 0.44384857983995313
+        }
+      ],
+      "medians": {
+        "p50": 2.02869043871312,
+        "p99": 1.0244041518739633,
+        "cpu": 2.042060988433228,
+        "memory_mib": 0.437578812485883
+      }
+    },
+    {
+      "cohort": "pagination-cruby-appsliced",
+      "a": "emit-cruby-yjit",
+      "b": "rails-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 1.0425376320753441,
+          "p99": 0.33285777308276204,
+          "cpu": 1.0518518518518518,
+          "memory_mib": 0.3989832010437666
+        },
+        {
+          "rep": 2,
+          "p50": 1.0367756342755343,
+          "p99": 1.045345105218988,
+          "cpu": 1.1225071225071226,
+          "memory_mib": 0.39087947882736157
+        },
+        {
+          "rep": 3,
+          "p50": 1.0509001093601062,
+          "p99": 1.1848228290437717,
+          "cpu": 1.0997171145685998,
+          "memory_mib": 0.39514884191679195
+        }
+      ],
+      "medians": {
+        "p50": 1.0425376320753441,
+        "p99": 1.045345105218988,
+        "cpu": 1.0997171145685998,
+        "memory_mib": 0.39514884191679195
+      }
+    },
+    {
+      "cohort": "pagination-cruby-appsliced",
+      "a": "rails-cruby-off",
+      "b": "rails-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 1.8354635952709213,
+          "p99": 0.5764930187328275,
+          "cpu": 1.8397306397306399,
+          "memory_mib": 0.7020335979124668
+        },
+        {
+          "rep": 2,
+          "p50": 1.861469583386695,
+          "p99": 3.4860048623617503,
+          "cpu": 2.0320512820512824,
+          "memory_mib": 0.6888165033860264
+        },
+        {
+          "rep": 3,
+          "p50": 1.8834383058726485,
+          "p99": 3.519070823987405,
+          "cpu": 2.004950495049505,
+          "memory_mib": 0.6990077177508269
+        }
+      ],
+      "medians": {
+        "p50": 1.861469583386695,
+        "p99": 3.4860048623617503,
+        "cpu": 2.004950495049505,
+        "memory_mib": 0.6990077177508269
+      }
+    },
+    {
+      "cohort": "pagination-cruby-appsliced",
+      "a": "emit-cruby-off",
+      "b": "emit-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 3.6087125962683073,
+          "p99": 3.485456444026767,
+          "cpu": 3.717029449423816,
+          "memory_mib": 0.7673130193905817
+        },
+        {
+          "rep": 2,
+          "p50": 3.6280218106391082,
+          "p99": 3.38827633776079,
+          "cpu": 3.696700507614213,
+          "memory_mib": 0.7711111068725586
+        },
+        {
+          "rep": 3,
+          "p50": 3.6358482114503112,
+          "p99": 3.0426074468371396,
+          "cpu": 3.6938906752411573,
+          "memory_mib": 0.785156249771327
+        }
+      ],
+      "medians": {
+        "p50": 3.6280218106391082,
+        "p99": 3.38827633776079,
+        "cpu": 3.696700507614213,
+        "memory_mib": 0.7711111068725586
+      }
+    },
+    {
+      "cohort": "pagination-cruby-dbpaged",
+      "a": "emit-cruby-off",
+      "b": "rails-cruby-off",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 0.1638752782741649,
+          "p99": 0.23420365816165442,
+          "cpu": 0.1593625498007968,
+          "memory_mib": 0.45071315311969934
+        },
+        {
+          "rep": 2,
+          "p50": 0.16463321199364883,
+          "p99": 0.23845543757949023,
+          "cpu": 0.16150740242261102,
+          "memory_mib": 0.4380062287470262
+        },
+        {
+          "rep": 3,
+          "p50": 0.16375982585856277,
+          "p99": 0.22737221857677106,
+          "cpu": 0.15858453473132372,
+          "memory_mib": 0.44659270877505636
+        }
+      ],
+      "medians": {
+        "p50": 0.1638752782741649,
+        "p99": 0.23420365816165442,
+        "cpu": 0.1593625498007968,
+        "memory_mib": 0.44659270877505636
+      }
+    },
+    {
+      "cohort": "pagination-cruby-dbpaged",
+      "a": "emit-cruby-yjit",
+      "b": "rails-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 0.22557465838617383,
+          "p99": 0.3275980136508443,
+          "cpu": 0.21411764705882352,
+          "memory_mib": 0.3968837910530816
+        },
+        {
+          "rep": 2,
+          "p50": 0.2327533814605901,
+          "p99": 0.309437553001837,
+          "cpu": 0.21342925659472423,
+          "memory_mib": 0.3983087595083185
+        },
+        {
+          "rep": 3,
+          "p50": 0.22955976050635152,
+          "p99": 0.3312914059555275,
+          "cpu": 0.21002386634844866,
+          "memory_mib": 0.402425578831312
+        }
+      ],
+      "medians": {
+        "p50": 0.22955976050635152,
+        "p99": 0.3275980136508443,
+        "cpu": 0.21342925659472423,
+        "memory_mib": 0.3983087595083185
+      }
+    },
+    {
+      "cohort": "pagination-cruby-dbpaged",
+      "a": "rails-cruby-off",
+      "b": "rails-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 1.8006681124774633,
+          "p99": 1.6360156482822668,
+          "cpu": 1.771764705882353,
+          "memory_mib": 0.6827526517867868
+        },
+        {
+          "rep": 2,
+          "p50": 1.8165681797515978,
+          "p99": 1.52563741495308,
+          "cpu": 1.7817745803357314,
+          "memory_mib": 0.6960104079201073
+        },
+        {
+          "rep": 3,
+          "p50": 1.8186027865992076,
+          "p99": 1.6170402747146557,
+          "cpu": 1.8210023866348446,
+          "memory_mib": 0.6957001102535832
+        }
+      ],
+      "medians": {
+        "p50": 1.8165681797515978,
+        "p99": 1.6170402747146557,
+        "cpu": 1.7817745803357314,
+        "memory_mib": 0.6957001102535832
+      }
+    },
+    {
+      "cohort": "pagination-cruby-dbpaged",
+      "a": "emit-cruby-off",
+      "b": "emit-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 1.3081477774266963,
+          "p99": 1.1696067548376297,
+          "cpu": 1.3186813186813187,
+          "memory_mib": 0.7753544171485244
+        },
+        {
+          "rep": 2,
+          "p50": 1.2849113184145073,
+          "p99": 1.175670289016664,
+          "cpu": 1.348314606741573,
+          "memory_mib": 0.7653783319204123
+        },
+        {
+          "rep": 3,
+          "p50": 1.2973270009625368,
+          "p99": 1.1098085497551924,
+          "cpu": 1.375,
+          "memory_mib": 0.7720547924303028
+        }
+      ],
+      "medians": {
+        "p50": 1.2973270009625368,
+        "p99": 1.1696067548376297,
+        "cpu": 1.348314606741573,
+        "memory_mib": 0.7720547924303028
+      }
+    },
+    {
+      "cohort": "scaling-cruby-n1000",
+      "a": "emit-cruby-off",
+      "b": "rails-cruby-off",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 2.0338111979562457,
+          "p99": 1.0202574152566468,
+          "cpu": 2.0523759972251128,
+          "memory_mib": 0.46602544264602647
+        },
+        {
+          "rep": 2,
+          "p50": 2.0145624354423473,
+          "p99": 2.0273262721558276,
+          "cpu": 2.0515830665243686,
+          "memory_mib": 0.4581234265180741
+        },
+        {
+          "rep": 3,
+          "p50": 2.0068625297375853,
+          "p99": 1.0450566047075651,
+          "cpu": 2.035515320334262,
+          "memory_mib": 0.4692137654477134
+        }
+      ],
+      "medians": {
+        "p50": 2.0145624354423473,
+        "p99": 1.0450566047075651,
+        "cpu": 2.0515830665243686,
+        "memory_mib": 0.46602544264602647
+      }
+    },
+    {
+      "cohort": "scaling-cruby-n1000",
+      "a": "emit-cruby-yjit",
+      "b": "rails-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 1.0453935879156788,
+          "p99": 1.221833498103558,
+          "cpu": 1.1008522727272727,
+          "memory_mib": 0.3999999991541691
+        },
+        {
+          "rep": 2,
+          "p50": 1.0318767952432988,
+          "p99": 1.055578263921035,
+          "cpu": 1.070383275261324,
+          "memory_mib": 0.39526730887228917
+        },
+        {
+          "rep": 3,
+          "p50": 1.0316770076030497,
+          "p99": 1.09926591581267,
+          "cpu": 1.1078571428571429,
+          "memory_mib": 0.3957550305150058
+        }
+      ],
+      "medians": {
+        "p50": 1.0318767952432988,
+        "p99": 1.09926591581267,
+        "cpu": 1.1008522727272727,
+        "memory_mib": 0.3957550305150058
+      }
+    },
+    {
+      "cohort": "scaling-cruby-n1000",
+      "a": "rails-cruby-off",
+      "b": "rails-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 1.8768004608971658,
+          "p99": 3.5342614316895,
+          "cpu": 2.047585227272727,
+          "memory_mib": 0.7146341446498017
+        },
+        {
+          "rep": 2,
+          "p50": 1.8661400552265397,
+          "p99": 1.8171189886987635,
+          "cpu": 1.9588850174216028,
+          "memory_mib": 0.6958808056381527
+        },
+        {
+          "rep": 3,
+          "p50": 1.8707446467409319,
+          "p99": 3.5727131804276344,
+          "cpu": 2.051428571428571,
+          "memory_mib": 0.7001989837352964
+        }
+      ],
+      "medians": {
+        "p50": 1.8707446467409319,
+        "p99": 3.5342614316895,
+        "cpu": 2.047585227272727,
+        "memory_mib": 0.7001989837352964
+      }
+    },
+    {
+      "cohort": "scaling-cruby-n1000",
+      "a": "emit-cruby-off",
+      "b": "emit-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 3.65131165699285,
+          "p99": 2.9511847880529847,
+          "cpu": 3.8174193548387096,
+          "memory_mib": 0.8325942357365557
+        },
+        {
+          "rep": 2,
+          "p50": 3.6433183417476496,
+          "p99": 3.489928877218539,
+          "cpu": 3.754557291666667,
+          "memory_mib": 0.8065410216611474
+        },
+        {
+          "rep": 3,
+          "p50": 3.6390530239441716,
+          "p99": 3.3965280395066317,
+          "cpu": 3.769181173436493,
+          "memory_mib": 0.8301675945686895
+        }
+      ],
+      "medians": {
+        "p50": 3.6433183417476496,
+        "p99": 3.3965280395066317,
+        "cpu": 3.769181173436493,
+        "memory_mib": 0.8301675945686895
+      }
+    },
+    {
+      "cohort": "scaling-cruby-n20",
+      "a": "emit-cruby-off",
+      "b": "rails-cruby-off",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 0.1626342270977335,
+          "p99": 0.20296792251100465,
+          "cpu": 0.15677966101694915,
+          "memory_mib": 0.42306466836077383
+        },
+        {
+          "rep": 2,
+          "p50": 0.16225870201098402,
+          "p99": 0.2330360380661307,
+          "cpu": 0.1558988764044944,
+          "memory_mib": 0.43935398617225047
+        },
+        {
+          "rep": 3,
+          "p50": 0.16170831130989485,
+          "p99": 0.23246947734778692,
+          "cpu": 0.1611111111111111,
+          "memory_mib": 0.4207511135885329
+        }
+      ],
+      "medians": {
+        "p50": 0.16225870201098402,
+        "p99": 0.23246947734778692,
+        "cpu": 0.15677966101694915,
+        "memory_mib": 0.42306466836077383
+      }
+    },
+    {
+      "cohort": "scaling-cruby-n20",
+      "a": "emit-cruby-yjit",
+      "b": "rails-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 0.226442267598486,
+          "p99": 0.33147644653176284,
+          "cpu": 0.21354166666666666,
+          "memory_mib": 0.3908277400654701
+        },
+        {
+          "rep": 2,
+          "p50": 0.22310513858042796,
+          "p99": 0.3268412748115878,
+          "cpu": 0.2072538860103627,
+          "memory_mib": 0.39532268790749353
+        },
+        {
+          "rep": 3,
+          "p50": 0.22160671911123178,
+          "p99": 0.3209267338649015,
+          "cpu": 0.20558375634517767,
+          "memory_mib": 0.39590827277394214
+        }
+      ],
+      "medians": {
+        "p50": 0.22310513858042796,
+        "p99": 0.3268412748115878,
+        "cpu": 0.2072538860103627,
+        "memory_mib": 0.39532268790749353
+      }
+    },
+    {
+      "cohort": "scaling-cruby-n20",
+      "a": "rails-cruby-off",
+      "b": "rails-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 1.8518748730854049,
+          "p99": 1.849653070349492,
+          "cpu": 1.84375,
+          "memory_mib": 0.7022371356119246
+        },
+        {
+          "rep": 2,
+          "p50": 1.8389577176002982,
+          "p99": 1.636081858173457,
+          "cpu": 1.844559585492228,
+          "memory_mib": 0.6822577012562641
+        },
+        {
+          "rep": 3,
+          "p50": 1.8658394554392932,
+          "p99": 1.6135244583461512,
+          "cpu": 1.8274111675126905,
+          "memory_mib": 0.7063848928691413
+        }
+      ],
+      "medians": {
+        "p50": 1.8518748730854049,
+        "p99": 1.636081858173457,
+        "cpu": 1.84375,
+        "memory_mib": 0.7022371356119246
+      }
+    },
+    {
+      "cohort": "scaling-cruby-n20",
+      "a": "emit-cruby-off",
+      "b": "emit-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 1.330044261877776,
+          "p99": 1.1325698853808723,
+          "cpu": 1.353658536585366,
+          "memory_mib": 0.7601602712195169
+        },
+        {
+          "rep": 2,
+          "p50": 1.3374272516064865,
+          "p99": 1.1665174002286025,
+          "cpu": 1.3875,
+          "memory_mib": 0.7582480080520926
+        },
+        {
+          "rep": 3,
+          "p50": 1.3615189499873321,
+          "p99": 1.1687876014638974,
+          "cpu": 1.4320987654320985,
+          "memory_mib": 0.7507098253198452
+        }
+      ],
+      "medians": {
+        "p50": 1.3374272516064865,
+        "p99": 1.1665174002286025,
+        "cpu": 1.3875,
+        "memory_mib": 0.7582480080520926
+      }
+    },
+    {
+      "cohort": "scaling-cruby-n3",
+      "a": "emit-cruby-off",
+      "b": "rails-cruby-off",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 0.2036438436095033,
+          "p99": 0.31099947371691045,
+          "cpu": 0.1995249406175772,
+          "memory_mib": 0.4146956803446571
+        },
+        {
+          "rep": 2,
+          "p50": 0.2089988273665423,
+          "p99": 0.3216756122297813,
+          "cpu": 0.2014388489208633,
+          "memory_mib": 0.4220820165206957
+        },
+        {
+          "rep": 3,
+          "p50": 0.20288171702920646,
+          "p99": 0.3213252873557293,
+          "cpu": 0.19999999999999998,
+          "memory_mib": 0.4171174029463275
+        }
+      ],
+      "medians": {
+        "p50": 0.2036438436095033,
+        "p99": 0.3213252873557293,
+        "cpu": 0.19999999999999998,
+        "memory_mib": 0.4171174029463275
+      }
+    },
+    {
+      "cohort": "scaling-cruby-n3",
+      "a": "emit-cruby-yjit",
+      "b": "rails-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 0.28737184210862593,
+          "p99": 0.4439623714211395,
+          "cpu": 0.26582278481012656,
+          "memory_mib": 0.3724212812160695
+        },
+        {
+          "rep": 2,
+          "p50": 0.27482427197385967,
+          "p99": 0.4419993956252567,
+          "cpu": 0.25311203319502074,
+          "memory_mib": 0.37614678920105366
+        },
+        {
+          "rep": 3,
+          "p50": 0.2698567708918879,
+          "p99": 0.4424164119344588,
+          "cpu": 0.25213675213675213,
+          "memory_mib": 0.37627634172570323
+        }
+      ],
+      "medians": {
+        "p50": 0.27482427197385967,
+        "p99": 0.4424164119344588,
+        "cpu": 0.25311203319502074,
+        "memory_mib": 0.37614678920105366
+      }
+    },
+    {
+      "cohort": "scaling-cruby-n3",
+      "a": "rails-cruby-off",
+      "b": "rails-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 1.8031007784957411,
+          "p99": 1.5424609970625105,
+          "cpu": 1.7763713080168775,
+          "memory_mib": 0.6885993472916295
+        },
+        {
+          "rep": 2,
+          "p50": 1.7642458292793317,
+          "p99": 1.4764516339702884,
+          "cpu": 1.7302904564315351,
+          "memory_mib": 0.6924421156144417
+        },
+        {
+          "rep": 3,
+          "p50": 1.781257268258901,
+          "p99": 1.4910398584898377,
+          "cpu": 1.7735042735042739,
+          "memory_mib": 0.6828155545470508
+        }
+      ],
+      "medians": {
+        "p50": 1.781257268258901,
+        "p99": 1.4910398584898377,
+        "cpu": 1.7735042735042739,
+        "memory_mib": 0.6885993472916295
+      }
+    },
+    {
+      "cohort": "scaling-cruby-n3",
+      "a": "emit-cruby-off",
+      "b": "emit-cruby-yjit",
+      "pairs": [
+        {
+          "rep": 1,
+          "p50": 1.2777534857063806,
+          "p99": 1.0805072438453516,
+          "cpu": 1.3333333333333333,
+          "memory_mib": 0.7667638483965015
+        },
+        {
+          "rep": 2,
+          "p50": 1.3416766534389843,
+          "p99": 1.0745229246596613,
+          "cpu": 1.3770491803278688,
+          "memory_mib": 0.7770034807506516
+        },
+        {
+          "rep": 3,
+          "p50": 1.3391716348666318,
+          "p99": 1.0829363424679417,
+          "cpu": 1.4067796610169492,
+          "memory_mib": 0.7569284039963513
+        }
+      ],
+      "medians": {
+        "p50": 1.3391716348666318,
+        "p99": 1.0805072438453516,
+        "cpu": 1.3770491803278688,
+        "memory_mib": 0.7667638483965015
+      }
+    }
+  ],
+  "mechanism_identity": {
+    "source": "19504f9f1f9e4c53930fbd235fc61116aa63773c",
+    "archive_sha256": "fd23e03a7ff9ade4497bbe0840dde32756cc10aa3fc512e81f86c98269148982",
+    "manifest_checks": {
+      "SHA256SUMS": {
+        "count": 9397,
+        "failed": []
+      },
+      "SHA256SUMS.received": {
+        "count": 9395,
+        "failed": []
+      }
+    }
+  }
+}
