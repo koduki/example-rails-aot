@@ -17,9 +17,9 @@ Rails アプリを [Roundhouse](https://github.com/rubys/roundhouse) で変換�
 
 ## 調査レポートのサマリー
 
-アーキテクチャ、仮説、測定、CRuby/JRuby の差と限界は [**Roundhouse × Rails × JIT / Spinel AOT 検証レポート**](docs/roundhouse-rails-jit-aot-report.md) を参照してください。
+[**Railsの特殊化とJIT/AOTへの影響の考察**](docs/roundhouse-rails-jit-aot-report.md)は、Rails・JITの特性、SpinelとRoundhouseの仕組み、仮説、実測、考察、総括をまとめた検証レポートです。[図表付きPDF](docs/rails-specialization-jit-aot.pdf)と[集計値・作図データ](docs/data/rails-specialization-jit-aot/)も収録しています。
 
-2026-10-01のGCE C3再試験は、1,000記事・20記事応答、別VMのk6 open arrival、120秒確認で評価しました。有効な同一反復のemit/Rails比の中央値はCRuby Off **0.378倍（3/5 pair）**、YJIT **1.148倍（2/5）**、JRuby JIT **0.889倍（3/5）**。失敗・未実行が残るため完全ランキングは未確定です。JRuby Offは補助診断、Spinelは低VUで健全な条件がある一方、正式容量は1/5確認です。[全反復の分析](docs/gce-c3-retest-analysis-20261001.md)と[追加再試験指示書](docs/gce-c3-followup-instructions.md)を併記しています。
+少件数やDBで取得対象を絞る条件ではemitの速度とメモリに利点があり、全1,000件取得では生成された関連付けの二重ループが優位を変えます。YJITの倍率と特殊化の絶対性能は別に評価します。Spinelは小規模で高処理量、C3の少接続で低メモリを示す一方、多接続ではFD上限・例外時の解放・tail latencyが運用条件になります。各測定の条件と実施リンク、全反復の成立範囲はレポートに記載しています。
 
 ### 歴史的なActions予備測定
 
