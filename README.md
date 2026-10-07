@@ -10,7 +10,7 @@ Rails（標準実行）、Roundhouse 変換後 Ruby（CRuby / JRuby）、およ�
 
 本リポジトリで実施されたすべての実験（小規模 Actions 測定、GCE C3 二台 VM 容量探索、同負荷同率比較、件数スケーリング・DB ページング対照、Spinel FD 上限検証）を統合した包括的な報告書を公開しています。
 
-- 📄 **総合レポート**: [**Railsの特殊化とJIT/AOTへの影響の考察**](docs/roundhouse-rails-jit-aot-report.md)
+- 📄 **総合レポート**: [**Railsの事前特殊化とJIT/AOTへの影響：パフォーマンスとリソース効率の検証レポート**](docs/roundhouse-rails-jit-aot-report.md)
 - 📑 **図表付き PDF**: [**rails-specialization-jit-aot.pdf**](docs/rails-specialization-jit-aot.pdf)
 - 📊 **作図・集計データ**: [`docs/data/rails-specialization-jit-aot/`](docs/data/rails-specialization-jit-aot/) / [`docs/assets/rails-specialization-jit-aot/`](docs/assets/rails-specialization-jit-aot/)
 - 🏷️ **完全生データ・検証ログ**: [GitHub Releases 一覧](#実験系列とデータ来歴)
@@ -190,7 +190,7 @@ python3 scripts/bench/run.py run --profile bench/profiles/crud-create-delete.yml
 
 ## ドキュメント体系
 
-- [**Railsの特殊化とJIT/AOTへの影響の考察（総合レポート）**](docs/roundhouse-rails-jit-aot-report.md) / [PDF版](docs/rails-specialization-jit-aot.pdf)
+- [**Railsの事前特殊化とJIT/AOTへの影響：パフォーマンスとリソース効率の検証レポート**](docs/roundhouse-rails-jit-aot-report.md) / [PDF版](docs/rails-specialization-jit-aot.pdf)
 - [GCE C3 ベンチマークレポート（容量測定）](docs/gce-c3-benchmark-report.md)
 - [GCE C3 追加再試験 分析レポート（系列 D）](docs/gce-c3-followup-analysis-20261002.md)
 - [GCE C3 メカニズム試験指示書（系列 E）](docs/gce-c3-mechanism-test-instructions-20261003.md)

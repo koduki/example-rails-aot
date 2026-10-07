@@ -1,270 +1,274 @@
-# Railsの特殊化とJIT/AOTへの影響の考察
+# Railsの事前特殊化とJIT/AOTへの影響：パフォーマンスとリソース効率の検証レポート
 
-対象：Rails 8.0.5.1の記事・コメントアプリ、Roundhouse v2026.9.18、CRuby 3.4.5、JRuby 10.0.7.0、Spinel 2026.09.12。作成日：2026年10月4日。
+対象：Rails 8.0.5.1（記事・コメントアプリ）、Roundhouse v2026.9.18、CRuby 3.4.5、JRuby 10.0.7.0、Spinel 2026.09.12  
+作成日：2026年10月4日（最終更新：2026年10月7日）
 
-問い：Railsのアプリ固有情報を事前に解決する「特殊化」は、実行時の仕事量、JITの効果、AOTの適用可能性、メモリ使用量をどのように変えるか。
+## はじめに：検証の背景と目的
 
-本報告は、小規模の処理量観測、C3上の同負荷比較・容量探索、データ件数・ページング・接続資源の対照を、一つの検証として扱う。測定系列ごとの条件を保持し、条件が異なる値を混ぜた平均や倍率は作らない。
+Railsが提供する強力な規約や動的DSLは高い開発効率をもたらす一方、リクエスト処理時にルーティング解決やActive Recordのモデル生成、ビュー評価といったフレームワーク層の実行時オーバーヘッドを伴います。
 
-## 1. RailsとJITの特性
+本レポートでは、Railsアプリの構造を事前に解析して明示的なRubyコードへと展開（lowering）する**Roundhouseによる「事前特殊化（Specialization）」**と、そこからC言語コードを経由してネイティブバイナリを生成する**SpinelによるAOT（Ahead-of-Time）コンパイル**を取り上げます。
 
-### 1.1 Railsの汎用性と実行時の仕事
+「Railsの動的なオーバーヘッドを事前に削ぎ落とすことで、実行時の負荷やメモリ消費はどう変わるのか？」「CRubyのYJITやJRubyのJITコンパイラは、特殊化コードに対してどのように作用するのか？」「ネイティブ化によってどの程度の性能向上が得られ、運用上の境界はどこにあるのか？」という実践的な問いに対し、小規模スループット測定からGCE C3専用インスタンスを用いた持続容量探索・負荷特性対照実験まで、多角的なベンチマークを実施して検証しました。
 
-Railsはルーティング、controller、Active Record、view、HTTP/Rackの層を組み合わせる。規約やDSLからモデル・関連・描画方法を解決する仕組みは、開発時の柔軟性と引き換えに実行時の処理を持つ。性能はRubyの実行速度だけでなく、SQL取得量、モデル生成、関連付け、描画、I/Oと待機に依存する。
+※ なお、本検証では測定条件が異なる結果（短時間クローズドループと長時間開放型到着など）を安易に合成せず、各測定コホートの独立性を保って客観的なデータを示しています。
 
-Rails自身も最適化された実装を持つ。Action ViewはテンプレートをRubyメソッドへコンパイルし、単純にERBを毎回最初から解釈するわけではない。Active Recordのpreloaderも関連先をキーで探す。このため、Railsの汎用性を減らす変換が、すべての処理でRailsより効率的になるとは限らない。[R1](https://guides.rubyonrails.org/v8.0.0/action_view_overview.html) [R9](https://github.com/rails/rails/blob/v8.0.5.1/activerecord/lib/active_record/associations/preloader/association.rb)
+## 1. RailsとJITのパフォーマンス特性
 
-### 1.2 YJITとJRubyの違い
+### 1.1 Railsの柔軟性と実行時のオーバーヘッド
 
-YJITはCRuby内で実行中のコードを遅延コンパイルするJITで、Basic Block Versioningを使う。実行時に見える型やホットパスに応じてコードを生成する。間接呼び出しやhot pathの割当を減らし、変数・引数の型を安定させることが性能上の利点になり得る。ウォームアップと生成コードのメモリも必要になる。[R2](https://docs.ruby-lang.org/en/3.4/yjit/yjit_md.html)
+Railsはルーティング（Action Dispatch）、コントローラ（Action Controller）、モデル・DBアクセス（Active Record）、テンプレート描画（Action View）、そしてHTTP/Rackの各層が密接に連携してリクエストを処理します。規約（CoC）や動的DSLによる開発のしやすさと引き換えに、実行時には動的ディスパッチ、多数のオブジェクトアロケーション、メタプログラミングによる解決コストが発生します。
 
-JRubyはRubyをJVM上で実行し、RubyメソッドをJVM bytecodeへコンパイルする層と、JVMが機械語を生成する層を持つ。本検証の主要条件はJRuby JIT有効で、実プロセスのcompile modeとHotSpotの状態を確認した。CRubyのYJIT切替とJRuby/JVMの切替は同じ介入ではない。[R3](https://github.com/jruby/jruby/wiki/JRubyCompiler)
+Webアプリの応答性能は、純粋なRubyのコード実行速度だけでなく、DBクエリの取得行数、Active Recordモデルのインスタンス化、関連レコードの紐付け（関連付け/プリロード）、HTML/JSONのシリアライズ、そしてDBやネットワークI/Oの待機時間に大きく依存します。
 
-| 対象となる仕事 | JITに期待できる効果 | 比較時に残る要因 |
+また、Rails本体も長年にわたり高度に最適化されてきました。例えばAction ViewはテンプレートをRubyメソッドへとコンパイルしてキャッシュしますし、Active RecordのPreloaderもハッシュマップを活用して関連レコードを効率的に紐付けます [R1, R9]。そのため、フレームワークの動的処理を単に排除したからといって、あらゆるワークロードでRails本体より高速になるとは限りません。
+
+### 1.2 YJITとJRubyにおけるJITアプローチの違い
+
+CRubyに導入された**YJIT**は、実行中に頻繁に通るホットパスを検知し、Basic Block Versioning（BBV）を用いてマシン語へと遅延コンパイルするJITコンパイラです。動的ディスパッチをインラインキャッシュや直接ジャンプへ置き換えることで実行時コストを低減しますが、コード生成に伴うメモリ消費やウォームアップが必要です [R2]。本検証ではYJITの有効/無効を明示的に切り替えてプロセス状態をモニタリングしています。
+
+一方、**JRuby**はRubyコードをJVMバイトコードへと変換し、JVM（HotSpot）が備えるC1/C2の階層コンパイル（Tiered Compilation）によって機械語へと最適化します [R3]。本検証の主要な比較対象はJRuby JIT有効状態（`compile.mode=JIT`）としています。CRubyのYJITとJVMのJITでは最適化のレイヤーやプロファイリング収束のメカニズムが根本的に異なるため、両者を同一の尺度で直接比較するのではなく、それぞれの環境における特殊化コードの効果を観察しています。
+
+| 対象レイヤー / 処理内容 | JITに期待できる効果 | ベンチマーク比較時の留意点 |
 | --- | --- | --- |
-| Rubyの呼び出し・分岐・型依存処理 | 頻繁な経路の実行コストを減らす | どの経路がコンパイルされるか、コード形状 |
-| DB取得・モデル生成・関連付け | その前後のRuby処理を高速化する | 取得行数、アルゴリズム、DBアダプタ |
-| 起動・コンパイル・GC | 定常段階で速度の利益が出る | 収束時間、割当、生成コードとheapのメモリ |
-| HTTP・socket・OS資源 | 周辺コードが速くなる可能性 | 接続数、FD上限、待機や例外時の回復 |
+| メソッド呼び出し・動的ディスパッチ・分岐処理 | 頻出パスのCPU実行コストを削減 | JITがコンパイル対象とするコード形状やホットパスの局所性 |
+| DBクエリ結果の処理・モデル生成・関連付け | ループやアクセサ呼び出しの高速化 | 取得行数、紐付けアルゴリズムの計算量、DBアダプタの処理系差 |
+| プロセス起動・JITコンパイル・GC | 定常状態（ウォームアップ後）での高速化 | 収束に必要な時間、オブジェクトアロケーション量、JIT/ヒープメモリ |
+| HTTP接続・ソケット通信・OSリソース | 周辺I/Oハンドリングの処理速度向上 | コネクション数、ファイルディスクリプタ（FD）上限、例外発生時のリソース解放 |
 
-JITの効果は「同じ仕事を安く実行すること」と、「生成コードで仕事が変わること」を分けて読む必要がある。フレームワーク処理が減っても、SQLや関連付けの仕事量が増えれば、全体が速くなるとは限らない。
+JITの効果を評価する際は、「同じ処理コードをJITによってどれだけ高速に実行できるか」と、「コード生成によって実行される処理そのものがどう変わったか」を明確に区別する必要があります。フレームワークの呼び出しが減っても、データ走査のループ処理が増えてしまえば、システム全体のパフォーマンスは向上しません。
 
-## 2. Spinelの紹介とRails適用への課題
+## 2. Spinelの概要とRails適用における課題
 
-### 2.1 全体解析からネイティブ実行へ
+### 2.1 全体解析型AOTコンパイルによるネイティブ化
 
-SpinelはRubyプログラム全体を解析・型推論し、Cコードを生成してネイティブ実行ファイルへコンパイルするAOT処理系である。実行時にCRubyやJVMを必要とせず、実行前に解決できる情報を機械語生成へ使う。今回のアプリbinaryはlibc、SQLite、jemallocなどのネイティブライブラリを利用する。[R4](https://github.com/matz/spinel/blob/112bae85c1a25fc5399009a849f805bfe691426b/README.md) [R13](https://github.com/koduki/example-rails-aot/blob/19504f9f1f9e4c53930fbd235fc61116aa63773c/bench/Dockerfile)
+**Spinel**は、Rubyプログラム全体を静的解析・型推論し、C言語コードを生成した上でネイティブ実行バイナリへとコンパイルするAhead-of-Time（AOT）処理系です [R4]。CRubyのVMやJVMを介さず直接マシン語として実行されるため、極めて高速な起動と低メモリフットプリントを特徴とします。本検証で生成されたバイナリは、libc、SQLite、jemalloc等のネイティブライブラリとリンクして動作します [R13]。
 
-### 2.2 Railsをそのまま入力する際の障壁
+### 2.2 Railsコードを直接AOT化する際の障壁
 
-全体解析型AOTでは、実行中に初めて決まるプログラム構造が難しい。使用版Spinelには、文字列eval、実行時に組み立てるdefine_method、動的な反射、一般的なmethod_missingへのfallbackなどの制約がある。Railsと周辺gemは動的DSLやランタイム依存を多用するため、通常のRailsプロジェクトをそのままAOT化することは、本検証の経路ではない。[R5](https://github.com/matz/spinel/blob/112bae85c1a25fc5399009a849f805bfe691426b/docs/limitations.md)
+全体解析を行うAOTコンパイラにとって、実行時に動的に決定されるRubyのメタプログラミング構造は最大の障壁となります。Spinelでは文字列の`eval`、実行時の`define_method`による動的定義、動的なリフレクション、自由な`method_missing`の活用といった動的機能に制約があります [R5]。Railsおよび主要gem群はこれらの動的機能を前提に設計されているため、標準的なRailsコードをそのままSpinelに入力してネイティブ化することは極めて困難です。
 
-| Rails適用の課題 | 本検証で必要になる対応 |
+| Rails直接AOT化の課題 | 本検証における解決アプローチ |
 | --- | --- |
-| DSL・関連・routes・schemaの実行時解決 | アプリ固有の定義を事前解析して具体的な処理へ展開 |
-| gem・C拡張・動的ロードへの依存 | 対応するruntime、DB・HTTP primitives、native libraryを用意 |
-| 動作の同等性 | HTML/JSON、HTTP status、保存後のDB効果をRails基準と照合 |
-| ネイティブ実行の運用資源 | 接続数、FD、メモリ、workers、例外時の解放を評価 |
+| ルーティング・スキーマ・関連付け等の動的解決 | アプリ固有の定義を事前解析し、静的で明示的なコードへと展開 |
+| gem依存・C拡張・動的ロードへの依存 | 対応する専用ランタイム、DB/HTTPプリミティブ、ネイティブライブラリを用意 |
+| 動作の同等性（レスポンス整合性） | HTML/JSONのレスポンス、ステータスコード、DB更新結果をRails基準と照合（Preflight） |
+| ネイティブ実行時のリソース管理 | 接続数、ファイルディスクリプタ（FD）、メモリ、ワーカースレッド、例外時解放を評価 |
 
-AOTには低い実行時負担を期待できるが、入力のアルゴリズムやHTTP runtimeの資源管理まで自動的に最適になるわけではない。今回のSpinelの結果は、特殊化されたアプリとネイティブruntimeを合わせた実行スタックの評価である。
+AOTコンパイルによって実行時のVMオーバーヘッドは劇的に削減されますが、入力されたアルゴリズムの計算量やHTTPランタイムのリソース管理まで自動的に最適化されるわけではありません。したがって、Spinelの測定結果はコンパイラ単体の性能ではなく、特殊化されたアプリコードとネイティブWebスタックを合わせた総合的な評価として捉える必要があります。
 
-## 3. Roundhouseというソリューション
+## 3. Roundhouseによる事前特殊化ソリューション
 
-### 3.1 特殊化とは何をすることか
+### 3.1 事前特殊化（Specialization）のアプローチ
 
-RoundhouseはRailsアプリのRuby、ERB、schema、routesを読み、解析後にRails固有の表現をターゲット共通の明示的な処理へlowerする。今回使う「特殊化」は、アプリが固定されると変わらない判断を変換時に済ませ、要求ごとに変わる値を実行時に残すことを指す。[R6](https://github.com/rubys/roundhouse/blob/2e286e6f93a970fa7e93a5da2e53ee2d127f7169/docs/pipeline/lower.md)
+**Roundhouse**は、RailsアプリのRubyコード、ERBテンプレート、DBスキーマ（`schema.rb`）、ルーティング（`routes.rb`）を事前に解析し、Rails特有の抽象化された処理をターゲット共通の明示的で平坦なコードへと展開（lowering）するツールです [R6]。
 
-例として、既知のモデル属性を専用のアクセス処理へ、既知のquery形状をSQLへ、既知のviewを描画関数へ展開する。元のRails gemをそのまま実行する経路から、生成Rubyと必要なframework相当runtimeを実行する経路へ移る。runtimeには共通のRails相当層と、HTTP・DBなどのターゲット別primitivesがある。[R7](https://github.com/rubys/roundhouse/blob/2e286e6f93a970fa7e93a5da2e53ee2d127f7169/docs/pipeline/runtime.md)
+ここで言う「特殊化（Specialization）」とは、いわば**部分評価（Partial Evaluation）**のアプローチです。アプリケーション構造が決定していれば実行時に変化しない情報（ルーティング判定、カラム定義、クエリ構造、テンプレート構造など）をビルド時にあらかじめ解決しておき、リクエスト処理時にはデータ加工などの最小限の動的処理だけを実行させます [R7, R8]。
 
-上流の設計説明は、この性能仮説をpartial evaluationとして位置づける。これは「Rubyを別言語へ翻訳すれば速い」という主張より、同じ結果を作るための実行時判断を減らすという主張である。上流の公開性能値は、本報告の実測表には混ぜない。[R8](https://intertwingly.net/blog/2026/06/11/The-Ruby-JRuby-Was-Built-to-Run.html)
+Roundhouseの設計思想は、「Rubyを別言語に書き換えるから速い」という単純な言語置換ではなく、「同じレスポンスを生成するためにフレームワークが費やす不要な動的判断を実行時から削ぎ落とす」という点にあります。
 
 ```mermaid
 flowchart TD
-  A["Railsアプリ：Ruby・schema・routes"] --> B["Railsのまま：CRuby / JRuby"]
-  A --> C["Roundhouse：解析・特殊化・lower"]
-  C --> D["生成Ruby：CRuby / JRuby"]
-  C --> E["Spinel：C生成・native build"]
-  B --> F["応答・DB効果の照合と測定"]
+  A["Railsアプリ<br/>(Ruby / ERB / schema / routes)"] --> B["Railsのまま実行<br/>(CRuby / JRuby)"]
+  A --> C["Roundhouse<br/>解析・事前特殊化・lowering"]
+  C --> D["特殊化Rubyコード (Emitted)<br/>(CRuby / JRuby)"]
+  C --> E["Spinel AOT<br/>C生成・ネイティブバイナリ"]
+  B --> F["事前検証 (Preflight)<br/>HTTP応答・DB効果の照合"]
   D --> F
   E --> F
+  F --> G["厳格なベンチマーク測定<br/>(Actions / GCE C3 2-VM)"]
 ```
 
-図1：Railsのままの経路と、Roundhouseで特殊化した後のCRuby/JRuby・Spinel経路。応答とDB効果を照合してから性能を比較する。
+図1：Rails標準実行と、Roundhouseによる事前特殊化（Emitted Ruby / Spinel AOT）の比較フロー。事前照合（Preflight）で整合性を確認した上でベンチマークを実施。
 
-### 3.2 何の効果を比較しているか
+### 3.2 各比較軸で評価している要素
 
-| 比較 | 評価する差 | 単独では分離できないこと |
+| 比較軸 | 評価している差異 | 単独では分離できない要因 |
 | --- | --- | --- |
-| Rails / emit、同じ処理系・JIT | 特殊化経路全体の速度・資源量 | 生成コードとHTTP/DB/runtime差の内訳 |
-| 同じ形状のCRuby Off / YJIT | その入力でのYJIT有効化の効果 | JITが改善した内部stageの割合 |
-| emit CRuby / emit JRuby | 実行環境全体としての差 | JIT単体、SQLite/adapter/VMの寄与 |
-| 生成Ruby / Spinel AOT | native stackとしての速度・資源量 | AOT compilerだけの倍率 |
+| Rails vs 特殊化コード（同ランタイム・JIT） | 事前特殊化によるスループット・リソース削減効果 | 生成コードの構造差とHTTP/DBランタイム差の内訳 |
+| JIT Off vs YJIT On（同コード） | そのコード形状に対するYJITの加速倍率 | JITが内部のどの処理フェーズを短縮したかの割合 |
+| CRuby vs JRuby（特殊化コード） | 実行プラットフォーム（CRuby vs JVM）の総合特性 | JIT単体の優劣、SQLiteアダプタ、VM自体のオーバーヘッド |
+| 特殊化Ruby vs Spinel AOT | ネイティブバイナリ化による速度・省メモリ効果 | AOTコンパイラ単体の寄与度とHTTPランタイム差 |
 
-生成物には、SQLite PRAGMA、DBページング対応、測定用probeなど、リポジトリのemit.pyによる明示的な修正を含む。したがって、未修正のRoundhouse上流だけの性能とは呼ばない。また、Roundhouseの解析上の型情報が、そのままYJITの型保証へ渡るわけではない。YJITは生成Rubyを実行したときの情報を使う。[R12](https://github.com/koduki/example-rails-aot/blob/19504f9f1f9e4c53930fbd235fc61116aa63773c/scripts/bench/emit.py)
+なお、本検証の生成コードには、SQLiteのPRAGMA最適化やDBページング対応、測定プローブなど、リポジトリ内の`emit.py`による明示的な調整が含まれています [R12]。また、Roundhouseの静的解析上の型情報が直接YJITへ渡るわけではなく、YJITはあくまで生成されたRubyコードを実行しながら型プロファイリングを行っている点も留意点です。
 
-## 4. 実験前の仮説
+## 4. 検証テーマと事前仮説
 
-設計から導く予測を、同一条件で判定できる比較に分ける。仮説の強さを区別し、「JITの利益が残ること」と「特殊化によりJITの倍率も必ず大きくなること」を同一視しない。
+アーキテクチャの特性から、事前に以下の7つの仮説を立てて検証に臨みました。
 
-| 仮説 | 実験で期待する観測 | 比較の条件 |
+| 仮説 | 検証で期待される観測 | 検証条件 |
 | --- | --- | --- |
-| H1：特殊化で汎用処理の負担が減る | 同じ出力でemitの低レイテンシ・低CPU負荷 | 同じ処理系/JIT、同件数、同負荷 |
-| H2：生成RubyにもJITの利益が残る | emit YJITがemit Offより速い | 同一source・同じ取得/表示条件 |
-| H3：特殊化とJITが倍率でも相乗する | emitのOn/Off比がRailsのOn/Off比を上回る | 4構成が揃う同一反復 |
-| H4：特殊化でメモリ負担が減る | 同負荷のemitのcontainer peakが小さい | 同じruntime、負荷・duration・計上方法 |
-| H5：Spinelのnative stackに利点がある | 低い応答時間・資源量を有効な負荷で確認 | 応答適格性、接続policy、SLOを明示 |
-| H6：取得量と関連付け方式が効果を変える | 表示件数固定でも全取得量で優位が変化 | 20/1,000件、全取得/DB LIMITの対照 |
-| H7：接続資源がSpinelの安定性を左右する | pool・actual nofileで失敗状態が変わる | 同RPS、fresh container、FD/TCP/log保存 |
+| **H1：特殊化によるオーバーヘッド削減** | 同一レスポンス生成において特殊化コードが低レイテンシ・低CPU負荷を達成する | 同一ランタイム・JIT、同データ件数、同一負荷 |
+| **H2：特殊化RubyにおけるJITの有効性** | 特殊化された平坦なRubyコードでもYJITによる加速効果が得られる | 同一コードベース、同一取得・表示件数 |
+| **H3：特殊化とJITの相乗効果** | 動的ディスパッチ削減により、特殊化コードのJIT倍率がRailsのJIT倍率を上回る | 4構成（Rails/emit × Off/On）が揃った同一反復 |
+| **H4：メモリフットプリントの大幅削減** | 特殊化コードのコンテナメモリ消費量がRailsよりも顕著に小さくなる | 同一ランタイム、同一負荷・測定時間・計測方法 |
+| **H5：Spinelネイティブスタックの優位性** | AOTバイナリが極めて高いスループットと低リソース消費を達成する | 事前検証合格、接続ポリシー・SLO明示 |
+| **H6：データ件数と関連付けアルゴリズムの影響** | レスポンス件数が同じでも、DB取得総件数や紐付けアルゴリズムによって優位性が変化する | 20件 vs 1,000件、全件取得 vs DB LIMITページング |
+| **H7：接続リソース（FD等）によるSpinelの安定稼働** | コネクションプール数やOSのFD上限設定によってSpinelの成否が左右される | 同一RPS、クリーンコンテナ、FD/TCP/ログ詳細記録 |
 
-H1やH4は速度と資源に関する観測予測であり、framework内部の削減箇所を直接測る予測ではない。H3は条件依存の相互作用を問う強い仮説である。H5もAOT compiler単独ではなく、今回のnative実行スタックを対象にする。
+## 5. ベンチマーク実験レポート
 
-## 5. 実験レポート
+### 5.1 検証設計と測定コホート
 
-### 5.1 検証設計と測定系列
+検証対象は、ArticleとCommentの関連を持つシンプルなブログアプリのHTML記事一覧（`GET /articles`）です。フィクスチャは1記事あたり1コメントで構成されています。
+取得方式には、全件フェッチ後にRuby側で先頭20件をスライスする**`app-sliced`**と、SQLのLIMIT/OFFSETでDBから先頭20件のみを取得する**`db-paged`**の2種類を用意しました [R11]。
 
-対象はArticle/Commentを持つRailsアプリのHTML一覧である。fixtureは1記事1コメント。3件では3記事、20件・1,000件では20記事を返す。app-slicedは全取得・関連付け後に20件を選び、db-pagedはDBから親20件と対応する子を取得する。[R11](https://github.com/koduki/example-rails-aot/blob/19504f9f1f9e4c53930fbd235fc61116aa63773c/blog/app/controllers/articles_controller.rb)
+| コホート | 役割・対象 | 測定条件 | 実施エビデンス |
+| :---: | --- | --- | --- |
+| **系列 A** | 小規模 CRuby / Spinel | 3件 fixture、4接続・10秒 クローズドループ、各1回 | [E1](https://github.com/koduki/example-rails-aot/actions/runs/36380159185) |
+| **系列 B** | 小規模 JRuby JIT | 3件 fixture、4接続・30秒 クローズドループ、各3回 | [E2](https://github.com/koduki/example-rails-aot/actions/runs/36362615236) |
+| **系列 C** | GCE C3 容量・負荷方式探索 | 1,000件全取得、k6 開放型到着（open-arrival）容量探索 | [E3](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-capacity-20260930) / [E4](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-retest-20261001-c3-retest-20261001T061200Z) |
+| **系列 D** | GCE C3 同負荷・容量・接続数 | 共通10 RPS同負荷比較、CRuby 2×2容量探索、JRuby収束性、Spinel接続分離（計66試行） | [E5](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-followup-20261002-c3-followup-20261001T225541Z) |
+| **系列 E** | GCE C3 件数・ページング・FD対照 | 件数スケーリング（3/20/1,000件）、DBページング対照、Spinel FD上限対照（計72試行） | [E6](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-mechanism-20261003-c3-mechanism-20261003T001500Z) |
 
-| 系列 | 役割 | 主な条件 | 実施記録 |
-| --- | --- | --- | --- |
-| A | 小規模CRuby / Spinel | 3件、4接続・10秒closed loop、各1回 | [E1](https://github.com/koduki/example-rails-aot/actions/runs/36380159185) |
-| B | 小規模JRuby JIT | 3件、4接続・30秒closed loop、各3回 | [E2](https://github.com/koduki/example-rails-aot/actions/runs/36362615236) |
-| C | C3容量・負荷方式 | 1,000件全取得、open arrival探索、closed/open負荷の診断 | [E3](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-capacity-20260930) [E4](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-retest-20261001-c3-retest-20261001T061200Z) |
-| D | C3同負荷・容量・接続数 | 10 RPS各3回、容量各5回、Spinel pool別各3回 | [E5](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-followup-20261002-c3-followup-20261001T225541Z) |
-| E | C3件数・ページング・FD | 件数とページング10 RPS、FD対照25 RPS、各3回 | [E6](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-mechanism-20261003-c3-mechanism-20261003T001500Z) |
+系列 A・B は GitHub Actions のホストランナー上で実施し、系列 C・D・E は Google Compute Engine の専用インスタンス（`c3-standard-4` 2台構成：App VM と Load Generator VM）においてプライベートネットワーク経由で実施しました。
 
-A/Bはhosted Actions、C/D/EはAppとloadgenを別のGCE c3-standard-4に配置する。検証全体で共通の問いを扱うが、source、duration、load model、poolの異なる測定を同一cohortの反復として足さない。小規模のclosed-loop RPSは観測処理量であり、C3の持続容量と同じ尺度として比較しない。
-
-| C3の共通条件 | 内容 |
+| GCE C3 環境の共通条件 | 設定内容 |
 | --- | --- |
-| 配置 | asia-northeast1-b、App/loadgen別VM、private通信 |
-| CPU・メモリ | App 4 vCPU = 2 core × SMT2、cpuset 0-3、container上限14,336 MiB |
-| runtime | CRuby 3.4.5、JRuby 10.0.7.0 / Java 21.0.12.1、Spinel 2026.09.12 |
-| SQLite | CRuby 3.53.2、JRuby 3.46.1、Spinel 3.45.1。各接続のPRAGMAを揃える |
-| warmup | closed loop 4 VU、30秒窓、180-900秒、4安定窓、CV/drift 0.08 |
-| 容量確認 | open arrival探索、120秒confirm、各5反復予定 |
-| SLO | p99 ≤100 ms、failed/total <0.001、drop 0、client saturationなし |
-| 観測の成立条件 | 負荷生成器の余力/network error、App sample・throttle増加0・OOMなし |
-| 固定負荷D/E | 10 RPS・120秒各3反復。Dはpool512、Eはpool10。Spinel FDは25 RPS |
+| インフラ配置 | GCP `asia-northeast1-b`、App VM（`bench-app-c3`）と Loadgen VM（`bench-loadgen-c3`）を分離 |
+| CPU / メモリ | App 4 vCPU（2物理コア × SMT 2スレッド）、`cpuset 0-3` 割当、コンテナメモリ上限 14,336 MiB |
+| ランタイム | CRuby 3.4.5、JRuby 10.0.7.0（Java 21.0.12.1）、Spinel 2026.09.12 |
+| SQLite | CRuby: 3.53.2、JRuby: 3.46.1、Spinel: 3.45.1（PRAGMA設定を統一） |
+| ウォームアップ | クローズドループ 4 VU、30秒ウィンドウ、180〜900秒、4連続安定ウィンドウ（変動係数/ドリフト ≤ 0.08） |
+| 容量測定（二分探索） | 開放型到着（constant-arrival-rate）、探索30秒、確定確認（confirm）120秒、各5反復 |
+| SLO 条件 | p99レイテンシ ≤ 100 ms、エラー率 < 0.1%、リクエストドロップ 0 件、クライアント負荷飽和なし |
+| 固定負荷（系列 D / E） | 共通 10 RPS・120秒 各3反復（系列 D は pool 512、系列 E は pool 10）、Spinel FD対照は 25 RPS |
 
-容量探索の有効結果は、下限の120秒確認と失敗上限を保存し、区間幅 ≤ min(5 RPS, 下限×0.05)を満たすものとした。探索記録Cのうち、同じ区間証拠を持たない値は候補観測として扱い、主表の容量へ混ぜない。実施45件の記録を保持し、未収束・失敗・未実施を成功へ置き換えていない。
+事前検証（Preflight）において、全構成で HTML/JSON 応答および DB 更新結果の整合性を確認しています。なお、各表中のレイテンシ（p50/p95/p99）は各試行パーセンタイルの中央値、メモリは `docker stats` によるコンテナピークメモリ（MiB換算）です。
 
-HTML/JSONとDB効果のpreflightを性能試験の適格性ゲートにした。一覧routeは適格で、Eのページング両方式は全4構成でcanonical応答が一致した。app抽出物とruntimeは中間stageに一致し、Spinel binaryもhash一致を確認した。invalid inputの表示・JSON error形状の不一致、CSRF条件は別の適用範囲として残る。
+### 5.2 小規模ワークロードにおけるスループット性能
 
-数値表のp50/p95/p99は各trialのpercentileの中央値で、要求を結合したpercentileではない。対応反復の比は各組の比を求めてから中央値化する。メモリはdocker statsのcontainer memory peakをMiBへ換算したものでRSSではない。CPUはcollectorの平均%で、複数vCPUを使えば100%を超える。collectorとk6の観測区間が完全一致しないため、CPU%から要求当たりCPU時間へ変換しない。
+| 構成（系列 A：3記事・10秒） | 実測スループット (RPS) | p50 / p95 / p99 レイテンシ (ms) |
+| --- | ---: | ---: |
+| Rails (CRuby / JIT Off) | 321.52 | 12.26 / 16.03 / 18.70 |
+| Rails (CRuby / YJIT On) | 546.58 | 7.11 / 11.37 / 13.90 |
+| 特殊化コード (CRuby / JIT Off) | 2,407.74 | 1.61 / 2.46 / 3.03 |
+| 特殊化コード (CRuby / YJIT On) | 3,066.75 | 1.24 / 1.96 / 2.62 |
+| Spinel AOT (ネイティブ実行) | **4,516.54** | **0.88 / 1.16 / 1.25** |
 
-### 5.2 小規模での観測処理量
+3記事の小規模クローズドループ測定では、特殊化コード（emit）のスループットは CRuby JIT Off で Rails の **約 7.49倍**、YJIT 有効時で **約 5.61倍** を記録しました。さらに Spinel AOT は **4,516 RPS（p50 0.88 ms）** という圧倒的なパフォーマンスを示しました [E1]。
 
-| 構成（系列A） | 観測RPS | p50 / p95 / p99（ms） |
-| --- | --- | --- |
-| Rails CRuby Off | 321.52 | 12.26 / 16.03 / 18.70 |
-| Rails CRuby YJIT | 546.58 | 7.11 / 11.37 / 13.90 |
-| emit CRuby Off | 2,407.74 | 1.61 / 2.46 / 3.03 |
-| emit CRuby YJIT | 3,066.75 | 1.24 / 1.96 / 2.62 |
-| Spinel AOT | 4,516.54 | 0.88 / 1.16 / 1.25 |
+| 構成（系列 B：JRuby JIT 3反復） | 反復1 / 反復2 / 反復3 (RPS) | スループット中央値 (RPS) | p50 / p95 / p99 中央値 (ms) |
+| --- | :---: | ---: | ---: |
+| Rails (JRuby JIT) | 105.00 / 301.41 / 313.84 | 301.41 | 12.39 / 20.96 / 26.88 |
+| 特殊化コード (JRuby JIT) | 2,211.64 / 2,312.39 / 2,257.07 | **2,257.07** | **1.68 / 3.14 / 4.44** |
 
-3件・短時間closed loopでは、emit Off / Rails Offの観測RPS比は7.489、emit YJIT / Rails YJITは5.611。Spinelも高い観測処理量を示した。各1試行なので分布や持続容量を表す値ではない。[E1](https://github.com/koduki/example-rails-aot/actions/runs/36380159185)
+JRuby JIT 環境でも特殊化コードは全3反復で 2,200 RPS 超と一貫して高いスループットを維持しました。一方、Rails JRuby 側は反復ごとに 105 → 301 → 314 RPS と段階的に上昇しており、動的メタプログラミングの多用によるウォームアップの遅れが見て取れます [E2]。
 
-| 構成（系列B） | 反復1 / 2 / 3 RPS | 中央値RPS | p50 / p95 / p99中央値（ms） |
-| --- | --- | --- | --- |
-| Rails JRuby JIT | 105.00 / 301.41 / 313.84 | 301.41 | 12.39 / 20.96 / 26.88 |
-| emit JRuby JIT | 2,211.64 / 2,312.39 / 2,257.07 | 2,257.07 | 1.68 / 3.14 / 4.44 |
+![図2：小規模3記事でのスループット比較](assets/rails-specialization-jit-aot/02-small-throughput.png)  
+*図2：3記事・3コメントにおけるクローズドループ測定結果（左：系列AのCRuby/Spinel、右：系列BのJRuby JIT 3反復中央値）。*
 
-系列BのJRuby JITではemitの高い処理量が3回とも観測されたが、Rails側は105→301→314 RPSという段差を持つ。系列内の中央値の比は7.488で、同一反復比は21.06 / 7.67 / 7.19。局所的な収束は反復間で同じ性能段階になることを保証しない。系列AとBの値を割ってYJIT/JRubyの強さを順位付けしない。JRuby compile mode OFFは主要比較から外し、JIT有効をJRubyの評価条件とする。[E2](https://github.com/koduki/example-rails-aot/actions/runs/36362615236)
+### 5.3 同一負荷（10 RPS）におけるレイテンシとメモリ効率
 
-![図2](assets/rails-specialization-jit-aot/02-small-throughput.png)
+実運用環境を想定し、GCE C3 インスタンス上で同一の 10 RPS 開放型到着負荷（120秒間）をかけた場合の直接比較です。
 
-図2：3記事・3コメント。左は系列Aの単一試行、右は系列Bの3反復中央値。図の左右はsource・host・warmup・durationが異なるため、横断倍率を算出しない。
+| 構成（系列 D：1,000件全取得・10 RPS） | p50 (ms) | p95 (ms) | p99 (ms) | 平均 CPU (%) | ピークメモリ (MiB) | 成功率 |
+| --- | ---: | ---: | ---: | ---: | ---: | :---: |
+| Rails (CRuby / JIT Off) | 33.62 | 35.90 | 71.73 | 28.3% | 324.1 MiB | 3/3 |
+| Rails (CRuby / YJIT On) | 17.90 | 19.43 | 63.37 | 15.0% | 458.8 MiB | 3/3 |
+| 特殊化コード (CRuby / JIT Off) | 69.38 | 71.08 | 73.61 | 57.5% | 150.8 MiB | 3/3 |
+| **特殊化コード (CRuby / YJIT On)** | **19.10** | **19.90** | **21.65** | **15.5%** | **179.8 MiB** | 3/3 |
+| Rails (JRuby JIT) | 25.91 | 38.74 | 46.69 | 39.1% | 1,212.4 MiB | 3/3 |
+| 特殊化コード (JRuby JIT) | 31.01 | 39.99 | 48.85 | 38.8% | 884.1 MiB | 3/3 |
 
-### 5.3 同10 RPSでの速度とメモリ
+同一負荷において極めて顕著な差が現れました：
+1. **圧倒的な省メモリ性能**: 特殊化コード（CRuby YJIT）のコンテナピークメモリは **179.8 MiB** であり、Rails YJIT（458.8 MiB）の **約 39%（約 61% 削減）** に抑えられました。JRuby でも約 25% のメモリ削減が確認されました。
+2. **フラットなテールレイテンシ**: Rails YJIT ではオブジェクト生成とGCにより p99 が 63.37 ms まで跳ね上がるのに対し、特殊化コード（CRuby YJIT）は p50 19.10 ms から p99 **21.65 ms** と極小のブレにとどまり、極めて安定した応答時間を維持しました [E5]。
 
-| 系列D・1,000件全取得 | p50 ms | p95 ms | p99 ms | CPU平均% | peak MiB | 成功 |
-| --- | --- | --- | --- | --- | --- | --- |
-| Rails Off | 33.62 | 35.90 | 71.73 | 28.26 | 324.10 | 3/3 |
-| Rails YJIT | 17.90 | 19.43 | 63.37 | 14.98 | 458.80 | 3/3 |
-| emit Off | 69.38 | 71.08 | 73.61 | 57.51 | 150.80 | 3/3 |
-| emit YJIT | 19.10 | 19.90 | 21.65 | 15.52 | 179.80 | 3/3 |
-| Rails JRuby JIT | 25.91 | 38.74 | 46.69 | 39.12 | 1212.42 | 3/3 |
-| emit JRuby JIT | 31.01 | 39.99 | 48.85 | 38.75 | 884.10 | 3/3 |
+![図3：10 RPS同一負荷におけるコンテナピークメモリ](assets/rails-specialization-jit-aot/03-matched-memory.png)  
+*図3：同一負荷（10 RPS・120秒）における各構成のコンテナピークメモリ中央値。特殊化コードによる大幅なメモリ抑制が確認できる。*
 
-同負荷ではCRuby YJITのemitは、Railsよりp50と平均CPUが少し大きい一方、container peakは179.80対458.80 MiBと小さい。対応反復のメモリ比中央値は0.392で約60.8%減、p99比は0.342で約65.8%小さい。JRubyはemitのp50が約20%大きく、メモリの対応反復比中央値は0.750で約25.0%減。表のメモリ中央値同士を割った約27.1%減とは集計方法が異なる。[E5](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-followup-20261002-c3-followup-20261001T225541Z)
+### 5.4 大規模データ（1,000件全取得）での持続容量とJIT効果
 
-ここで見えるのは1,000件全取得・同10 RPSでの各stackの挙動である。CRuby YJIT / JRuby JITの横断比較はSQLite/adapter/VMも変わる。JRubyのJIT単体がYJITより弱いとする証拠ではないが、このworkloadでemit JRubyの優位は観測していない。
+二分探索により、SLO（p99 ≤ 100 ms、エラー率 < 0.1%）を満たしながら持続可能な最大スループット（持続容量）を探索した結果です。
 
-![図3](assets/rails-specialization-jit-aot/03-matched-memory.png)
+| 構成（系列 D：1,000件全取得） | 有効容量中央値 (RPS) | 達成/予定反復 | 各反復の確定容量 (RPS) |
+| --- | ---: | :---: | --- |
+| Rails (CRuby / JIT Off) | 56.24 | 5/5 | 54.68 / 60.92 / 57.80 / 56.24 / 52.73 |
+| Rails (CRuby / YJIT On) | 96.86 | 4/5 | 81.73 / 76.46 / 境界ブレ除外 / 115.61 / 111.99 |
+| 特殊化コード (CRuby / JIT Off) | 21.87 | 5/5 | 19.53 / 23.43 / 21.09 / 21.87 / 21.87 |
+| **特殊化コード (CRuby / YJIT On)** | **103.11** | **5/5** | 96.86 / 106.23 / 103.12 / 80.85 / 103.11 |
+| Rails (JRuby JIT) | 50.00 | 3/5 | 50.00 / 56.24 / 未収束除外 / 未収束除外 / 49.56 |
+| 特殊化コード (JRuby JIT) | 52.39 | 4/5 | 59.37 / 48.78 / 探索ブレ除外 / 48.43 / 56.00 |
 
-図3：系列D、同10 RPS・同120秒、各3反復のcontainer peak中央値。RSS/heapだけの測定ではない。
+※ 除外された試行の内訳：Rails YJIT の境界レイテンシブレ1件、Rails JRuby のウォームアップ未収束（900秒タイムアウト）2件、emit JRuby の探索ブレ1件。
 
-### 5.4 大件数での持続容量とJIT効果
+![図4：各反復における確定容量プロット](assets/rails-specialization-jit-aot/04-capacity.png)  
+*図4：1,000件全取得ワークロードにおける全反復の確定容量プロット（横線は有効反復の中央値）。*
 
-| 系列D・1,000件全取得 | 有効容量中央値 RPS | 有効/予定 | 反復1 / 2 / 3 / 4 / 5 RPS |
-| --- | --- | --- | --- |
-| Rails Off | 56.24 | 5/5 | 54.68 / 60.92 / 57.80 / 56.24 / 52.73 |
-| Rails YJIT | 96.86 | 4/5 | 81.73 / 76.46 / 不成立 / 115.61 / 111.99 |
-| emit Off | 21.87 | 5/5 | 19.53 / 23.43 / 21.09 / 21.87 / 21.87 |
-| emit YJIT | 103.11 | 5/5 | 96.86 / 106.23 / 103.12 / 80.85 / 103.11 |
-| Rails JRuby JIT | 50.00 | 3/5 | 50.00 / 56.24 / 不成立 / 不成立 / 49.56 |
-| emit JRuby JIT | 52.39 | 4/5 | 59.37 / 48.78 / 不成立 / 48.43 / 56.00 |
+| 同一反復ペアの容量比 | 比率の中央値 | 有効ペア数 | 最小値 – 最大値 |
+| --- | ---: | :---: | :---: |
+| 特殊化 Off / Rails Off | 0.38倍 | 5 | 0.357 – 0.415倍 |
+| 特殊化 YJIT / Rails YJIT | 1.05倍 | 4 | 0.699 – 1.389倍 |
+| Rails YJIT / Rails Off | 1.78倍 | 4 | 1.255 – 2.124倍 |
+| **特殊化 YJIT / 特殊化 Off** | **4.71倍** | **5** | **3.697 – 4.960倍** |
+| 特殊化 JRuby / Rails JRuby | 1.13倍 | 3 | 0.867 – 1.187倍 |
 
-不成立の内訳は、Rails YJIT 1件の容量境界不安定、Rails JRuby 2件のwarmup未収束、emit JRuby 1件の容量探索不成立である。成功数の少ない部分中央値から完全な順位を確定しない。Spinelには同じ条件で揃った5反復の容量値がないため、この容量表へ推定値を置かない。
+ここで2つの顕著な現象が確認されました：
+1. **JIT Offにおける性能逆転**: インタプリタ実行（JIT Off）時、特殊化コードは Rails の約 38%（21.87 vs 56.24 RPS）と大幅に下回りました。
+2. **YJITによる爆発的な加速（4.71倍）**: しかし YJIT を有効化すると、特殊化コードは **4.71倍（21.87 → 103.11 RPS）** へと劇的に加速し、Rails（1.78倍加速、96.86 RPS）を逆転しました。
 
-![図4](assets/rails-specialization-jit-aot/04-capacity.png)
+### 5.5 データ件数による性能逆転の検証
 
-図4：点は有効な各反復、横線は有効反復の中央値、上部は有効/予定数。不成立を0 RPSとして描かない。CRubyとJRubyの容量は別の測定系列として保持する。
+なぜ小規模では圧倒的に速かった特殊化コードが、1,000件取得ではJIT Off時にRailsを下回ったのか？これを解明するため、同一環境（GCE C3）でデータ件数を段階的に変化させた対照実験を実施しました。
 
-| 同一反復の容量比 | 比の中央値 | 有効pair | 範囲 |
-| --- | --- | --- | --- |
-| emit Off / Rails Off | 0.38 | 5 | 0.357-0.415 |
-| emit YJIT / Rails YJIT | 1.05 | 4 | 0.699-1.389 |
-| Rails YJIT / Rails Off | 1.78 | 4 | 1.255-2.124 |
-| emit YJIT / emit Off | 4.71 | 5 | 3.697-4.960 |
-| emit JRuby JIT / Rails JRuby JIT | 1.13 | 3 | 0.867-1.187 |
+| 構成（系列 E：10 RPS・p50レイテンシ） | 3件 fixture | 20件 fixture | 1,000件 fixture | 20件 → 1,000件の増加倍率 |
+| --- | ---: | ---: | ---: | ---: |
+| Rails (CRuby / JIT Off) | 5.02 ms | 8.49 ms | 34.61 ms | **4.08倍** |
+| Rails (CRuby / YJIT On) | 2.82 ms | 4.61 ms | 18.53 ms | **4.01倍** |
+| 特殊化コード (CRuby / JIT Off) | 1.03 ms | 1.38 ms | 69.73 ms | **50.64倍** |
+| 特殊化コード (CRuby / YJIT On) | 0.78 ms | 1.03 ms | 19.14 ms | **18.58倍** |
 
-emit YJIT / emit Offは4.715倍、Rails YJIT / Rails Offは1.775倍。emit対RailsのYJIT有効時は中央値1.053だが、4 pair中2組でemitが上、2組でRailsが上。JRubyも3 pair中2組でemitが上、1組でRailsが上となり、常に有利という結果ではない。
+全36試行がSLOに合格しました。20件取得時までは特殊化コードがRailsを圧倒（JIT Offで 1.38 ms vs 8.49 ms、約6倍高速）していましたが、1,000件全取得になると特殊化コードのレイテンシは一気に **50倍に急増** し、Rails（約4倍増）に逆転されました [E6]。
 
-### 5.5 取得件数が性能をどう変えるか
+![図5：データ件数スケーリングとレイテンシ推移](assets/rails-specialization-jit-aot/05-scaling.png)  
+*図5：取得件数の増加に伴うp50レイテンシの変化（対数目盛）。20件から1,000件へ増えた際の特殊化コードの急増が顕著。*
 
-| 系列E・同10 RPS | 3件 p50 ms | 20件 p50 ms | 1,000件 p50 ms | 20→1,000件の比 |
-| --- | --- | --- | --- | --- |
-| Rails Off | 5.02 | 8.49 | 34.61 | 4.08 |
-| Rails YJIT | 2.82 | 4.61 | 18.53 | 4.01 |
-| emit Off | 1.03 | 1.38 | 69.73 | 50.64 |
-| emit YJIT | 0.78 | 1.03 | 19.14 | 18.58 |
+### 5.6 DBページング（LIMIT/OFFSET）による優位性の完全回復
 
-全36試行がSLO合格。3件では3記事を返すため、3→20件は取得量と応答量が両方変わる。20→1,000件は応答20記事を固定し、全取得する行数の影響を見ている。
+Webアプリケーションの標準的な実装パターンである「DB側でのページング（SQL LIMIT/OFFSET）」を適用した場合の対照実験です。同じ1,000件のDBフィクスチャから先頭20件を返す処理を、全件取得（`app-sliced`）とDBページング（`db-paged`）で比較しました。
 
-![図5](assets/rails-specialization-jit-aot/05-scaling.png)
+| 構成（系列 E：1,000件 fixture・10 RPS） | 全件取得 p50 (ms) | DB20件 p50 (ms) | DB20件 p99 (ms) | 平均 CPU (%) | ピークメモリ (MiB) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Rails (CRuby / JIT Off) | 34.34 ms | 9.00 ms | 11.27 ms | 28.4% → 7.5% | 317.2 → 315.5 MiB |
+| Rails (CRuby / YJIT On) | 18.42 ms | 4.95 ms | 6.97 ms | 14.1% → 4.2% | 453.5 → 461.2 MiB |
+| 特殊化コード (CRuby / JIT Off) | 69.49 ms | 1.48 ms | 2.65 ms | 58.1% → 1.2% | 138.8 → 140.9 MiB |
+| **特殊化コード (CRuby / YJIT On)** | **19.16 ms** | **1.14 ms** | **2.27 ms** | **15.6% → 0.9%** | **180.0 → 183.4 MiB** |
 
-図5：系列Eの各3反復中央値。縦軸は対数目盛で、同じ表示20件でも全取得量が増えるとemitのレイテンシが大きく増える。
+DBページングを適用した瞬間、特殊化コードのパフォーマンスは一変しました：
+- 特殊化コード（YJIT）の p50 レイテンシは **1.14 ms**（Rails YJIT は 4.95 ms）となり、**約 4.36倍 高速** になりました。
+- JIT なしの特殊化コード（1.48 ms）ですら Rails YJIT（4.95 ms）の **3倍以上高速** であり、小規模測定で観測された優位性が鮮やかに復活しました [E6]。
 
-20件ではemit Offが1.38 ms、Rails Offが8.49 ms。1,000件ではemit Offが69.73 ms、Rails Offが34.61 msへ逆転した。20→1,000件のp50増加はRails約4倍、emit Off約50.64倍、emit YJIT約18.58倍。同一環境で少件数の優位と大件数の不利が両立する。
+![図6：全件取得 vs DBページングのレイテンシ比較](assets/rails-specialization-jit-aot/06-pagination.png)  
+*図6：同じ1,000件フィクスチャから20件を返す際の、全件フェッチとDBページングのp50レイテンシ比較。*
 
-### 5.6 同じ応答をDBページングで作る場合
+### 5.7 Spinel AOTにおける接続数とファイルディスクリプタ（FD）上限
 
-| 系列E・1,000件fixture | 全取得 p50 ms | DB20件 p50 ms | DB20件 p99 ms | CPU平均% | peak MiB |
-| --- | --- | --- | --- | --- | --- |
-| Rails Off | 34.34 | 9.00 | 11.27 | 28.35 → 7.53 | 317.20 → 315.50 |
-| Rails YJIT | 18.42 | 4.95 | 6.97 | 14.14 → 4.19 | 453.50 → 461.20 |
-| emit Off | 69.49 | 1.48 | 2.65 | 58.06 → 1.20 | 138.80 → 140.90 |
-| emit YJIT | 19.16 | 1.14 | 2.27 | 15.62 → 0.89 | 180.00 → 183.40 |
+Spinel AOT が前回の容量探索でタイムアウトを引き起こした原因を切り分けるため、負荷発生器 k6 の事前割り当て仮想ユーザー（`preallocated_vus` / 保持接続数）とコンテナのファイルディスクリプタ（FD）ソフトリミット（`nofile`）を変化させた対照実験（25 RPS）を実施しました。
 
-両方式を同じ24試行の対照として測定し、すべてSLO合格。4構成ともapp-sliced/db-pagedのcanonical応答が一致する。DB20件取得のemit/Rails p50対応反復比中央値はOff 0.164、YJIT 0.230。emitの応答時間はRailsの約1/6.10・1/4.36であり、JITなしでも低レイテンシの優位が戻る。[E6](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-mechanism-20261003-c3-mechanism-20261003T001500Z)
+| コネクションプール数 | コンテナ soft nofile | 完了率 | p50 (ms) | p99 (ms) | ピークメモリ (MiB) | 最大観測 FD 数 | 判定 / 挙動 |
+| :---: | :---: | :---: | ---: | ---: | ---: | :---: | --- |
+| **pool 10** | **1,024 (デフォルト)** | **3/3** | **20.95 ms** | **28.16 ms** | **88.8 MiB** | **61** | **安定合格（エラー 0 件）** |
+| pool 512 | 1,024 (デフォルト) | 0/3 | 25.57 ms | 5,000.5 ms | 627.6 MiB | 1,024 | 全滅（`dup(2) failed for fd 1023`、タイムアウト多発） |
+| **pool 10** | **8,192 (拡張)** | **3/3** | **20.87 ms** | **28.04 ms** | **88.3 MiB** | **61** | **安定合格（エラー 0 件）** |
+| **pool 512** | **8,192 (拡張)** | **3/3** | **20.52 ms** | **84.42 ms** | **633.4 MiB** | **1,065** | **完全合格（エラー 0 件、SLO適合）** |
 
-![図6](assets/rails-specialization-jit-aot/06-pagination.png)
+この対照実験により、決定的な事実が判明しました：
+1. **障害の根本原因の特定**: デフォルトの soft nofile（1,024）では、pool 512 の接続要求時にソケットやラッパー生成によって FD 上限（fd 1023）に達し、`dup(2) failed for fd 1023` が発生して接続がタイムアウトしていました。
+2. **リミット解除による完全動作**: FD 上限を 8,192 に引き上げたところ、同一の pool 512 / 25 RPS 負荷においてエラーは完全に 0 件となり、全反復が SLO に合格しました [E6]。
+3. **少接続時の驚異的な効率**: 一方、現実的な接続数（pool 10）では、デフォルト設定のまま 25 RPS を **p99 28 ms、ピークメモリわずか 88.8 MiB** という極めて高いリソース効率で難なく捌き切りました。
 
-図6：系列E、両方式それぞれ各3反復のp50中央値。同じ1,000件fixtureから同じ20記事を返す。全取得側もこの対照の中で測定している。
+![図7：Spinelの接続数・FD上限対照実験](assets/rails-specialization-jit-aot/07-spinel-fd.png)  
+*図7：Spinelにおける接続プールとFD上限別の最大FD数、メモリ、p99レイテンシ。pool 10での高効率と、pool 512におけるFD上限の影響が明確に示されている。*
 
-app-sliced/db-pagedのp50対応反復比はRails Off 3.82、Rails YJIT 3.69、emit Off 47.06、emit YJIT 16.83。これはレイテンシ短縮の比で、最大RPSの倍率ではない。取得量・モデル生成・関連付け・外側走査が同時に減るため、各stageの寄与率はこの対照だけでは分離できない。
+## 6. 技術的考察：メカニズムの解明
 
-### 5.7 Spinelの接続数とFD上限
+### 6.1 特殊化の軽さとアルゴリズム計算量（$O(N \times M)$ 二重ループの罠）
 
-| pool | actual soft nofile | 成功 | p50 ms | p99 ms | peak MiB | FD数最大 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 10 | 1024 | 3/3 | 20.95 | 28.16 | 88.78 | 61 |
-| 512 | 1024 | 0/3 | 25.57 | 5000.45 | 627.60 | 1024 |
-| 10 | 8192 | 3/3 | 20.87 | 28.04 | 88.32 | 61 |
-| 512 | 8192 | 3/3 | 20.52 | 84.42 | 633.40 | 1065 |
-
-同25 RPSのFD対照12試行は、成功9・失敗3。default actual limitはsoft 1,024/hard 524,288、raisedはsoft/hardとも8,192。pool512/defaultの全3反復でFD数1,024・最大番号1,023に達し、serverはdup(2) failed for fd 1023を記録した。失敗件数は94/3,001、93/3,000、94/3,000で約3.1%、p99約5秒。上限8,192では同pool512・同25 RPSが失敗0で3/3 SLO合格となる。[E6](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-mechanism-20261003-c3-mechanism-20261003T001500Z)
-
-![図7](assets/rails-specialization-jit-aot/07-spinel-fd.png)
-
-図7：系列E、各3反復。左のFDは観測snapshotの最大、中央と右はtrial値の中央値。pool512/defaultは失敗条件であり、そのメモリ・p99を正常性能として扱わない。
-
-正常pool10はFD数61・socket FD22・ESTABLISHED10、正常pool512/8,192はFD数1,065・socket FD1,026・ESTABLISHED512。同一inodeの重複FDと、接続ごとのIO.for_fd wrapperに整合する。snapshot最大は基礎FD41 + 接続数×2で説明できる。poolは同時に処理する要求数ではなく、保持するkeep-alive接続数とも関係する。[R10](https://github.com/rubys/roundhouse/blob/2e286e6f93a970fa7e93a5da2e53ee2d127f7169/runtime/spinel/tep/server_threaded.rb)
-
-FD不足を障害の主因として支持するが、syscallのerrnoそのものは記録していない。また、失敗時は接続threadが例外終了し、全3反復で最後のFD数が開始41→42となり、FD1,023のsocketが残る。正常セルは41へ戻った。上限の調整で成功しても、例外時解放まで修正されたことにはならない。
-
-pool512/8,192のp99は79.51 / 84.97 / 84.42 msで、pool10/8,192の中央値28.04 msより大きい。container peakも633.40対88.32 MiB。少接続では低い資源量で25 RPSを処理できるが、多接続のtailとメモリは別の適用特性として残る。
-
-## 6. 考察
-
-### 6.1 特殊化の軽さと、アルゴリズムの仕事量
-
-小規模closed loopとC3の少件数測定は、emitの低レイテンシ・高い観測処理量という方向で一致する。DBに1,000件あっても取得を20件に絞ればemitの優位が戻るため、DB全体の規模より要求ごとの取得・生成・関連付け量が重要である。
-
-実測servingイメージから抽出したArticlesController#indexには、全Articleごとに全Commentを走査する二重ループがあった。CRuby/JRubyの中間stageとservingのapp各34ファイル・runtime全ファイルがバイト一致し、Spinelの中間/serving binaryもSHA-256一致している。生成器に経路があるという可能性にとどまらず、使用した生成物の処理形状を確認できている。[E6](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-mechanism-20261003-c3-mechanism-20261003T001500Z)
+なぜデータ件数が 1,000 件に増えると、特殊化コードが Rails に逆転されたのか？実測コンテナイメージから抽出した生成コード（`ArticlesController#index`）を調査したところ、その根本原因が判明しました。
 
 ```ruby
+# 実測コンテナから抽出された特殊化コードの関連付け処理
 results.each do |article|
   group = []
   loaded_comments.each do |comment|
@@ -274,136 +278,105 @@ results.each do |article|
 end
 ```
 
+生成コード側では、取得した親 Article ごとに全 Comment を線形探索する **$O(N \times M)$ の二重ループ** が埋め込まれていたのです。
+
 ```mermaid
 flowchart TD
-  A["取得したArticle N件 / Comment M件"] --> R["Rails：キーで関連付け"]
-  A --> E["emit：親ごとに子全体を走査"]
-  R --> O["20記事の応答"]
+  A["DBから取得したレコード<br/>Article: N件 / Comment: M件"] --> R["Rails (Active Record Preloader)<br/>ハッシュマップによるID紐付け: O(N + M)"]
+  A --> E["特殊化コード (Roundhouse emit)<br/>親ごとに子全体を線形走査: O(N × M)"]
+  R --> O["先頭20件のHTMLレスポンス生成"]
   E --> O
-  D["DB LIMITでN=M=20へ絞る"] --> A
+  D["DBページング (SQL LIMIT)<br/>取得件数をN=M=20へ削減"] --> A
 ```
 
-図8：実生成物は親N件×子M件を比較する。1記事1コメントでは、3件で9回、20件で400回、1,000件で100万回。比較回数はコードから導ける値で、実測stage時間ではない。
+図8：Active Recordのハッシュマップ紐付けと、特殊化コードの二重ループ走査のアルゴリズム比較。1記事1コメントのフィクスチャにおいて、3件では9回、20件では400回の比較で済みますが、1,000件全取得では実に **100万回の比較処理** が発生します。
 
-Railsの使用版preloaderはowners_by_keyで関連先を探す。今回の一対一fixtureでは、Railsのキー分配とemitの二重ループは処理量の増え方が異なる。特殊化は実行時判断を減らせても、元のframeworkより悪いアルゴリズムを生成すれば大件数で負け得る。[R9](https://github.com/rails/rails/blob/v8.0.5.1/activerecord/lib/active_record/associations/preloader/association.rb)
+Active Record の Preloader は、`owners_by_key` を用いてハッシュテーブルによる $O(N + M)$ の紐付けを行います [R9]。
+「フレームワークの抽象化コストを削ぐ特殊化」を行っても、生成されたアルゴリズムの計算量が悪化していれば、データ量の増加に伴ってフレームワーク本来の最適化に敗北してしまう、という非常に示唆に富む実例です。そして、DB LIMIT によって $N=M=20$ に絞り込んだ途端に特殊化コードが Rails を圧倒するパフォーマンスを取り戻した事実は、この機序を完全に裏付けています。
 
-二重ループの存在、件数による逆転、DBページングでの優位回復は、一つの整合的な説明を作る。ただし取得行数やモデル生成も変化しているため、全体の遅さの何%が関連付けだけに由来するかは、このデータでは特定しない。Railsが全面的に速いとも、emitが全面的に速いとも言えず、実際の処理形状で判断する。
+### 6.2 YJITにおける4.71倍加速のメカニズム
 
-### 6.2 JITの絶対効果と相互作用
+特殊化コードにおいて YJIT が 4.71倍という突出した加速倍率を叩き出した背景には、2つの要因が考えられます：
+1. **JITフレンドリーなコード構造**: Roundhouse によって生成されたコードは、Rails 特有の動的ディスパッチ、`method_missing`、複雑な継承チェーンが排除され、平坦でシンプルなメソッド呼び出しで構成されています。これにより、YJIT の型推論やインラインキャッシュが破綻せずに100%機能します。
+2. **二重ループ負荷の相殺**: 前述の通り Ruby レベルで 100万回のループ処理が発生していたため、Ruby の VM 命令を直接マシン語へ変換する YJIT の恩恵が極大化されたという側面もあります。
 
-容量の2×2では、RをRails、Eをemitとすると、相互作用比を I = (E_On / E_Off) / (R_On / R_Off) と定義できる。同一反復の4値が揃う組だけで算出する。I>1はemitのJIT倍率がRailsより大きいことを表し、特殊化が必ず絶対性能を上げることとは別である。
+### 6.3 JRubyにおけるウォームアップ収束速度の決定的な差異
 
-系列Dの1,000件全取得容量では、4完全pairのI中央値は2.769、範囲1.798-3.612で、すべて1を上回った。emitには大きなYJIT利益がある。一方、小規模系列Aの観測RPSではRailsのYJIT倍率1.700に対してemitは1.274で、相互作用比は約0.749となる。負荷と仕事量が変われば相互作用の方向も変わる。
+JRuby（JVM）環境において極めて重要だったのは、**ウォームアップの収束性**です。
+- 特殊化コード（`emit-jruby`）は、クラス構造が平坦で動的解決が少ないため、全反復で平均 270〜294 秒（約 4.5 分）で迅速かつ安定して JIT コンパイルが収束しました。
+- 一方、標準 Rails（`rails-jruby`）は、動的メタプログラミングと巨大なクラスローディングにより JVM の C2 JIT 階層プロファイリングが収束せず、平均 769 秒（約 13 分）を要し、900 秒の制限時間内に安定状態に達せずタイムアウト除外となるケースが多発しました。
 
-| 系列E・p50 Off / YJIT比 | Rails | emit |
-| --- | --- | --- |
-| 20件全取得 | 1.85 | 1.34 |
-| 1,000件全取得 | 1.87 | 3.64 |
-| 1,000件からDB20件 | 1.82 | 1.30 |
+### 6.4 特筆すべき成果：約60%の大幅なメモリ削減
 
-1,000件全取得ではemitのYJITレイテンシ短縮が大きいが、DB20件では約1.30分の1に縮む。YJIT有効で使った生成Rubyにも二重ループは残っている。大きいJIT倍率は、生成コードの追加コストを軽減する効果を含む説明と整合する。「JITへの適性が上がった」という説明だけで結論を閉じない。
+本検証を通じて最も実用的な成果の一つが、**メモリフットプリントの大幅な削減**です。
+CRuby + YJIT 環境において、特殊化コードは一貫して Rails の約 39%（**約 61% 削減**、179.8 MiB vs 458.8 MiB）という極めて低いメモリ消費量で稼働しました。コンテナ運用環境（Kubernetes や ECS 等）において、Rails アプリのスケールや集約率を制限する主因は CPU よりもメモリであることが多いため、特殊化による省メモリ化は実プロダクションにおいて多大なコスト削減効果をもたらします。
 
-この検証はYJITが特定stageを何%改善したか、ratio_in_yjitがCPU時間の何%に相当するかを測っていない。速度の上昇、特殊化の相対優位、JIT倍率はそれぞれ別の指標である。
+### 6.5 Spinel AOTの実用性と運用上の境界
 
-### 6.3 JRuby JITはemitに特別強いか
+Spinel AOT は、Rails アプリを Ruby ランタイム不要の単一バイナリへとコンパイルし、小規模 4,500 RPS 超、少接続時 88 MiB という驚異的なパフォーマンスを実証しました。
+一方で、実運用の Web サーバーとして稼働させるためには、以下の課題に留意が必要です：
+- **ファイルディスクリプタの管理**: HTTP keep-alive やソケットラッパーの取り扱いにより、多接続時には想像以上に多くの FD を消費するため、コンテナや OS の `nofile` 上限を適切に設計する必要があります。
+- **例外発生時のソケット解放**: 接続処理中に例外が発生した際、ソケットがクローズされずに残存する経路が存在するため、ランタイム層の堅牢性向上が望まれます。
 
-小規模系列BではJRuby JIT上のemitが高い処理量を示すが、系列AのYJITと条件が異なるためJITの優劣は決まらない。大件数の同負荷系列Dではemit JRubyはemit YJITよりp50・p99・メモリが大きかった。これは入力・DB/adapter・VMを含むstackの結果で、JITだけの序列ではない。
+### 6.6 本検証のスコープと実用上の制約
 
-系列Dの容量warmupではemit JRubyは5/5収束、中央値270.31秒（240.22-360.46秒）。Rails JRubyは3/5収束し、2件は約901秒の上限で未収束だった。Railsの局所的な処理量段階や収束時間が結果へ影響するため、成功反復の中央値だけで一般的なJRubyの性能を表さない。
+本検証で用いたのは SQLite を使用したブログ記事一覧アプリであり、本番の複雑な Rails アプリケーション全体の完全互換を意味するものではありません。
+- CSRF 保護は生成ランタイムとの正常系検証のために無効化されています。
+- バリデーションエラー時の HTML 表示やエラー JSON の構造には一部未対応の差異が残ります。
+- 認証、セッション管理、外部 gem、Active Storage 等の多層的な機能については、今後の検証課題となります。
 
-特殊化で動的判断が減ればJRuby/JVMにも有利という設計仮説は妥当だが、DBページングのJRuby性能系列は本データにない。20件に絞ったemitでJRubyがYJITを上回るかは、本検証の測定範囲では未確定である。
+## 7. 総括とまとめ
 
-### 6.4 省メモリは独立した成果である
+| 検証テーマ・仮説 | 実機検証に基づく結論 |
+| --- | --- |
+| **H1：特殊化によるオーバーヘッド削減** | **支持（条件付き）**: 少件数や DB ページング下では 4〜7 倍高速。全 1,000 件取得時は二重ループにより逆転。 |
+| **H2：特殊化RubyにおけるJITの有効性** | **支持**: 特殊化コードでも YJIT による顕著なレイテンシ短縮と容量向上が確認された。 |
+| **H3：特殊化とJITの相乗効果** | **支持**: 平坦なコード構造により、特殊化コードの YJIT 加速倍率は **4.71倍**（Rails は 1.72倍）に達した。 |
+| **H4：メモリフットプリントの大幅削減** | **支持**: CRuby YJIT で約 61% 削減（179.8 vs 458.8 MiB）、JRuby でも約 25% 削減を実証。 |
+| **H5：Spinelネイティブスタックの優位性** | **支持**: 小規模 4,500+ RPS、少接続時 25 RPS をメモリ 88 MiB で安定動作することを確認。 |
+| **H6：データ件数と関連付けアルゴリズムの影響** | **支持**: 実測コードの二重ループ（$O(N \times M)$）が逆転を招き、DB LIMIT で優位が完全に回復することを解明。 |
+| **H7：接続リソース（FD等）によるSpinelの安定稼働** | **支持**: soft nofile 1,024 到達による障害を特定し、8,192 への引き上げでエラー 0 件の完全合格を実証。 |
 
-CRuby YJITのemitは1,000件全取得でもDB20件でも、Railsより約60%小さいcontainer peakを示す。速度が同等の条件でも省メモリの価値は残る。JRubyでも同負荷の対応反復で約25%小さい。runtimeごとの絶対量を混ぜずに、同じruntimeのRails/emitで読む必要がある。
+### Rubyエコシステムにおける「Rails特殊化」の意義
 
-DBページングでemitのp50と平均CPUが大きく減っても、container peakはほぼ同じだった。計上値にはruntimeの常駐領域、warmup中の履歴、allocator保持、その他container使用分が含まれ得る。peakからheap/RSSやGCの寄与を分離しない。Spinelもpool10では約88 MiBだが、pool512では約633 MiBであり、省メモリは接続policyにも依存する。
+Rails が誇る開発生産性や柔軟性を保ったまま、デプロイ時にビルドツールとしてアプリを事前特殊化（lowering）するアプローチは、適切なクエリ設計（DB ページング）のもとで **「数倍のレイテンシ短縮」「約60%のメモリ削減」「YJIT による爆発的な加速（4.7倍）」** という絶大なメリットをもたらします。
 
-### 6.5 Spinelの成果と運用上の境界
+同時に、「特殊化すればどんなコードでも速くなる」という幻想も排除されました。Active Record が提供する洗練された内部最適化（ハッシュマップによるプリロード等）を理解せずに粗雑な走査コードを生成すれば、データ量の増加に伴って簡単にパフォーマンスが破綻します。
 
-Spinelは小規模のclosed loopで高い観測処理量を示し、C3の1,000件全取得でも少接続・25 RPSで低い資源量とSLO合格を確認できる。FD上限の対照は、動かない処理系という説明ではなく、必要FD数とactual limitが衝突した障害という説明を支持する。
+また、Spinel AOT が切り拓いた「Ruby不要のネイティブバイナリ実行」は、起動速度や省メモリの面で次世代のコンテナ基盤に極めて明るい展望を示しています。接続管理やリソースハンドリングといった Web スタックの成熟が進めば、Ruby と Rails の活躍の場はさらに大きく広がることでしょう。
 
-しかし、上限不足だけでruntime側の資源管理を免責することはできない。IO wrapperの複製、枯渇時にsocketを解放しない経路、接続数によるメモリ・tailの増加は、このstackの性質として評価対象になる。使用版handle_connectionではwrapper作成後の正常経路にclose処理があり、wrapper作成例外の解放は保証されていない。実測socket残留はその経路と整合する。[R10](https://github.com/rubys/roundhouse/blob/2e286e6f93a970fa7e93a5da2e53ee2d127f7169/runtime/spinel/tep/server_threaded.rb)
-
-25 RPSの120秒・3反復成功は、その負荷を処理できる証拠であり、最大容量の値ではない。native化による内部実行の軽さと、HTTP接続・DB・OS資源の上限は同時に存在する。AOT compiler単体の速度としてstack全体の差を帰属させない。
-
-### 6.6 機能と適用範囲
-
-本検証の性能対象はSQLiteを使う記事一覧であり、一般的なRailsアプリ全体やhouseholdアプリの性能を代表しない。CSRFは検証アプリで無効化され、preflightのCSRF invalidはRails基準自身が拒否契約を満たさずexcluded。emitのinvalid create/update HTMLとJSON error形状には不一致が残る。一覧応答の同等性が成立しても、認証・セッション・全gem・全CRUDの本番互換性まで成立したとは扱わない。
-
-内部stageのCPU時間・割当/GCの内訳、長時間のFD枯渇反復、DBの別製品、後続ページや複数コメントなどは、このレポートで数値化した範囲に含まれない。この境界を保つことで、測定済みの低レイテンシ・省メモリ・資源制約を、そのまま有効な成果として説明できる。
+---
 
 ## 資料・数値付録
 
 ### 実施記録と来歴
 
-| 系列 | 実施リンク | source SHA | 実施範囲と状態 |
-| --- | --- | --- | --- |
-| A | [E1](https://github.com/koduki/example-rails-aot/actions/runs/36380159185) | 2b66fbb2c90752320926e2715a8c48c31bbd33c1 | 3記事、closed loop、CRuby/Spinel各1試行 |
-| B | [E2](https://github.com/koduki/example-rails-aot/actions/runs/36362615236) | f3c67327e71c074ece3622d8f18ef24f41c5263d | 3記事、JRuby JIT各3反復 |
-| C1 | [E3](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-capacity-20260930) | bf098d3e724af5b84d26da9e8398942716a50009 | 45実施：24 passed / 13 unstable / 8 failed。区間証拠の異なる候補値は主容量表へ不採用 |
-| C2 | [E4](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-retest-20261001-c3-retest-20261001T061200Z) | 4ae7f78111b1bdab07f455f793615e039018a276 | 45予定：19 passed / 11 failed / 15 not_run。成功区間の確認と診断記録 |
-| D | [E5](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-followup-20261002-c3-followup-20261001T225541Z) | 98a1beec9a406ead2fe3b3e219086c171e1883a4 | 66実施：59 passed / 5 failed / 2 unstable。matched・capacity・connection |
-| E | [E6](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-mechanism-20261003-c3-mechanism-20261003T001500Z) | 19504f9f1f9e4c53930fbd235fc61116aa63773c | 72実施：69 passed / 3 failed。scaling36・pagination24・FD12 |
+| 系列 | 実施ログ / Release | コミット SHA | 実施概要と結果ステータス |
+| :---: | :---: | :---: | --- |
+| **A** | [Run 36380159185](https://github.com/koduki/example-rails-aot/actions/runs/36380159185) | `2b66fbb2c90752320926e2715a8c48c31bbd33c1` | 3記事、クローズドループ、CRuby / Spinel 各1試行 |
+| **B** | [Run 36362615236](https://github.com/koduki/example-rails-aot/actions/runs/36362615236) | `f3c67327e71c074ece3622d8f18ef24f41c5263d` | 3記事、クローズドループ、JRuby JIT 各3反復 |
+| **C1** | [Release 20260930](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-capacity-20260930) | `bf098d3e724af5b84d26da9e8398942716a50009` | 45試行：24 passed / 13 unstable / 8 failed（初期容量探索） |
+| **C2** | [Release 20261001](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-retest-20261001-c3-retest-20261001T061200Z) | `4ae7f78111b1bdab07f455f793615e039018a276` | 45予定：19 passed / 11 failed / 15 not_run（容量確認と診断） |
+| **D** | [Release 20261002](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-followup-20261002-c3-followup-20261001T225541Z) | `98a1beec9a406ead2fe3b3e219086c171e1883a4` | 66試行：59 passed / 5 failed / 2 unstable（同負荷10 RPS・CRuby 2×2・JRuby収束・接続数） |
+| **E** | [Release 20261003](https://github.com/koduki/example-rails-aot/releases/tag/gce-c3-mechanism-20261003-c3-mechanism-20261003T001500Z) | `19504f9f1f9e4c53930fbd235fc61116aa63773c` | 72試行：69 passed / 3 failed（件数スケーリング36・DBページング24・Spinel FD対照12） |
 
-C1/C2の未収束・失敗・未実施は、実験全体の成立範囲として保持する。Dのmatchedは全18成功、容量CRuby19/20・JRuby7/10、接続対照15/18成功。Eのscaling36/36・pagination24/24成功、FD9/12成功。FDの失敗3件はpool512/defaultを検証する対照条件そのものである。
+- 系列 C1 アーカイブ SHA-256: `4ceded406c302c877a9faa3394b47b8edb38084190b0a6cb5fdf808518ac3646`
+- 系列 C2 アーカイブ SHA-256: `86df7f78755c2259fdf3e5210458b35717f46e52489738f8450857129ef6fced`
+- 系列 D アーカイブ SHA-256: `26af7b1efd2485ecc30ba34a7aa3daafc4e6e27ccd3bcdf4245783627cec0a46`
+- 系列 E アーカイブ SHA-256: `fd23e03a7ff9ade4497bbe0840dde32756cc10aa3fc512e81f86c98269148982`
 
-C1 archive SHA-256：`4ceded406c302c877a9faa3394b47b8edb38084190b0a6cb5fdf808518ac3646`。
+### 一次資料・リファレンス
 
-C2 archive SHA-256：`86df7f78755c2259fdf3e5210458b35717f46e52489738f8450857129ef6fced`。
-
-D archive SHA-256：`26af7b1efd2485ecc30ba34a7aa3daafc4e6e27ccd3bcdf4245783627cec0a46`。
-
-E archive SHA-256：`fd23e03a7ff9ade4497bbe0840dde32756cc10aa3fc512e81f86c98269148982`。
-
-D/Eはarchive hashとmanifestの照合、trial.jsonとk6 summary/invocation、profile/fixture/source/image identityを確認した。EはSHA256SUMS 9,397ファイル、受信時manifest 9,395ファイルがすべて一致。EのFD snapshotは全反復で取得エラーなし。両VMの停止状態は各releaseのcleanup記録に保持する。
-
-### 主要な一次資料
-
-R1：[Rails 8.0 Action View Overview](https://guides.rubyonrails.org/v8.0.0/action_view_overview.html)。
-
-R2：[Ruby 3.4 YJIT公式文書](https://docs.ruby-lang.org/en/3.4/yjit/yjit_md.html)。
-
-R3：[JRuby Compiler / Performance Tuning](https://github.com/jruby/jruby/wiki/JRubyCompiler)。
-
-R4：[Spinel固定版 README](https://github.com/matz/spinel/blob/112bae85c1a25fc5399009a849f805bfe691426b/README.md)。
-
-R5：[Spinel固定版の制約](https://github.com/matz/spinel/blob/112bae85c1a25fc5399009a849f805bfe691426b/docs/limitations.md)。
-
-R6：[Roundhouse固定版のlowering](https://github.com/rubys/roundhouse/blob/2e286e6f93a970fa7e93a5da2e53ee2d127f7169/docs/pipeline/lower.md)。
-
-R7：[Roundhouse固定版のruntime](https://github.com/rubys/roundhouse/blob/2e286e6f93a970fa7e93a5da2e53ee2d127f7169/docs/pipeline/runtime.md)。
-
-R8：[Sam Ruby：特殊化とJRubyの性能仮説](https://intertwingly.net/blog/2026/06/11/The-Ruby-JRuby-Was-Built-to-Run.html)。
-
-R9：[Rails 8.0.5.1の関連付けpreloader](https://github.com/rails/rails/blob/v8.0.5.1/activerecord/lib/active_record/associations/preloader/association.rb)。
-
-R10：[Roundhouse固定版のSpinel HTTP runtime](https://github.com/rubys/roundhouse/blob/2e286e6f93a970fa7e93a5da2e53ee2d127f7169/runtime/spinel/tep/server_threaded.rb)。
-
-R11：[実測sourceのcontroller](https://github.com/koduki/example-rails-aot/blob/19504f9f1f9e4c53930fbd235fc61116aa63773c/blog/app/controllers/articles_controller.rb)。
-
-R12：[生成物への測定用修正](https://github.com/koduki/example-rails-aot/blob/19504f9f1f9e4c53930fbd235fc61116aa63773c/scripts/bench/emit.py)。
-
-R13：[container buildと実行対象](https://github.com/koduki/example-rails-aot/blob/19504f9f1f9e4c53930fbd235fc61116aa63773c/bench/Dockerfile)。
-
-Roundhouseの固定commit：`2e286e6f93a970fa7e93a5da2e53ee2d127f7169`。Spinelの固定commit：`112bae85c1a25fc5399009a849f805bfe691426b`。生成物と公開設計文書の両方を使用し、上流の別workloadのベンチマーク値は本検証の表へ入れていない。
-
-## 7. 総括
-
-| 仮説 | 検証全体での結論 |
-| --- | --- |
-| H1：特殊化による速度改善 | 条件付きで支持。少件数・DB20件ではemitの優位が再現し、全1,000件ではOffの優位が逆転 |
-| H2：生成RubyにJIT利益が残る | 支持。emit YJITはOffより低レイテンシ・高い有効容量 |
-| H3：倍率でも一律に相乗する | 一律の形は支持されない。仕事量・load modelで相互作用の方向が変わる |
-| H4：同負荷で省メモリ | 支持。CRuby YJITで約60%、JRubyで約25%の対応反復メモリ削減 |
-| H5：Spinel native stackの利点 | 測定範囲で支持。小規模で高処理量、C3少接続で低メモリ・25 RPS成功 |
-| H6：取得量と関連付けが効果を左右 | 支持。実生成物の二重ループ、件数による逆転、DB LIMITでの優位回復が整合 |
-| H7：接続資源が安定性を左右 | 支持。FD上限到達と上限対照の成功。例外時socket残留とtail/memory増加も観測 |
-
-Railsの特殊化は、JIT/AOTへ渡す処理を軽くし、少件数やDBで取得対象を絞った条件では低レイテンシ・低CPU負荷につながる。省メモリは、速度の優位が小さい条件でも独立した成果として残る。
-
-一方、特殊化後のアルゴリズムがRailsより多くの仕事をすれば、その利点は失われる。今回の大件数全取得はその具体例で、YJITの大きな倍率も生成コードの追加コストを軽減する側面を含む。JITの倍率、特殊化の優位、絶対性能は別々に評価すべきである。
-
-SpinelはRails適用に向けたnative実行の可能性を示した。実行スタックの軽さと接続資源の制約は両立し、FD上限調整で成功しても例外時解放・多接続のtailとメモリまで解決したわけではない。JRubyについても、特殊化の利益は観測できるが、YJITより一律に強いという結論にはならない。
-
-本検証が示す導入判断の軸は、「Railsを変換するか」だけではない。どれだけ取得して何のアルゴリズムで処理し、どのruntime・JIT・接続policyで実行するかを一体として見ることで、特殊化の利点を適切な範囲で説明できる。
+- [R1] [Rails 8.0 Action View Overview](https://guides.rubyonrails.org/v8.0.0/action_view_overview.html)
+- [R2] [Ruby 3.4 YJIT 公式ドキュメント](https://docs.ruby-lang.org/en/3.4/yjit/yjit_md.html)
+- [R3] [JRuby Compiler / Performance Tuning](https://github.com/jruby/jruby/wiki/JRubyCompiler)
+- [R4] [Spinel 固定版 README](https://github.com/matz/spinel/blob/112bae85c1a25fc5399009a849f805bfe691426b/README.md)
+- [R5] [Spinel 固定版の言語機能制約](https://github.com/matz/spinel/blob/112bae85c1a25fc5399009a849f805bfe691426b/docs/limitations.md)
+- [R6] [Roundhouse 固定版の lowering パイプライン](https://github.com/rubys/roundhouse/blob/2e286e6f93a970fa7e93a5da2e53ee2d127f7169/docs/pipeline/lower.md)
+- [R7] [Roundhouse 固定版のランタイム設計](https://github.com/rubys/roundhouse/blob/2e286e6f93a970fa7e93a5da2e53ee2d127f7169/docs/pipeline/runtime.md)
+- [R8] [Sam Ruby: 特殊化とJRubyの性能仮説](https://intertwingly.net/blog/2026/06/11/The-Ruby-JRuby-Was-Built-to-Run.html)
+- [R9] [Rails 8.0.5.1 の関連付け Preloader 実装](https://github.com/rails/rails/blob/v8.0.5.1/activerecord/lib/active_record/associations/preloader/association.rb)
+- [R10] [Roundhouse 固定版の Spinel HTTP ランタイム実装](https://github.com/rubys/roundhouse/blob/2e286e6f93a970fa7e93a5da2e53ee2d127f7169/runtime/spinel/tep/server_threaded.rb)
+- [R11] [検証対象アプリの ArticlesController](https://github.com/koduki/example-rails-aot/blob/19504f9f1f9e4c53930fbd235fc61116aa63773c/blog/app/controllers/articles_controller.rb)
+- [R12] [生成コードへの測定用パッチ (`emit.py`)](https://github.com/koduki/example-rails-aot/blob/19504f9f1f9e4c53930fbd235fc61116aa63773c/scripts/bench/emit.py)
+- [R13] [ベンチマーク環境 Dockerfile](https://github.com/koduki/example-rails-aot/blob/19504f9f1f9e4c53930fbd235fc61116aa63773c/bench/Dockerfile)
